@@ -2,6 +2,8 @@ package qupath.ext.efficientv2unet;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -47,9 +49,11 @@ public class OpInEx {
     private final QuPathGUI qupath;
     private File project_dir;
     public File training_root;
-    public File images_dir;
-    public File masks_dir;
-    public File prediction_dir;
+    public File images_dir; // train images
+    public File masks_dir; // train masks
+    public File prediction_dir; // predicted images
+    public File temp_dir; // folder to put images to be predicted
+    public ArrayList<File> temp_files = null;
 
     /**
      * Just gets and sets the current project folder.
@@ -61,7 +65,6 @@ public class OpInEx {
         // get & set the project folder File
         project_dir = retrieve_Project_dir();
         if (project_dir == null) throw new RuntimeException("Please open a project first");
-        logger.info("project_dir= " + getProject_dir());
     }
 
     /**
@@ -74,8 +77,6 @@ public class OpInEx {
             project_dir = qupath.getProject().getPath().getParent().toFile();
         }
         catch (Exception e) {
-            // logger.error("No project selected");
-            // logger.error(e.getLocalizedMessage(), e);
             GuiTools.showNoProjectError("Please open a project first");
 
         }
@@ -89,6 +90,21 @@ public class OpInEx {
     public String getProject_dir() {
         return project_dir.getAbsolutePath();
     }
+    /**
+     * Getter for the temp_dir
+     * @return String temp_dir
+     */
+    public String getTemp_dir() {
+        return temp_dir.getAbsolutePath();
+    }
+
+    /**
+     * Getter for the prediction_dir
+     * @return String prediction_dir
+     */
+    public String getPrediction_dir() {
+        return prediction_dir.getAbsolutePath();
+    }
 
     /**
      * Creates output folders
@@ -101,6 +117,7 @@ public class OpInEx {
         images_dir = new File(training_root, "images");
         masks_dir = new File(training_root, "masks");
         prediction_dir = new File(training_root, "prediction");
+        temp_dir = new File(training_root, "temp");
         /*
         if (images_dir.exists() || masks_dir.exists()) {
              // following function is deprecated but I did not find any other fitting function in GuiTools
@@ -111,6 +128,7 @@ public class OpInEx {
             images_dir.mkdirs();
             masks_dir.mkdirs();
             prediction_dir.mkdirs();
+            temp_dir.mkdirs();
         }
         catch (Exception e) {
             logger.error(e.getMessage(), e);
@@ -129,12 +147,83 @@ public class OpInEx {
     }
 
     /**
-     * Export images and corresponding masks.
+     * Delete temp files
+     * @return boolean
+     */
+    public boolean deleteTempFiles() {
+        if (temp_files != null) {
+            temp_files.forEach(f -> {
+                if (f.delete()) {
+                    logger.trace("Deleted temp file: " + f.getAbsolutePath());
+                }
+                else logger.trace("Could not delete temp file: " + f.getAbsolutePath());
+            });
+            return true;
+        }
+        else return false;
+    }
+
+
+    /**
+     * Saves a list of images to the temp folder
+     *
+     * @param imageList = List of ProjectImageEntries to be saved as tif
+     * @return List of saved files
+     */
+    public ArrayList<File> exportTempImages(List<ProjectImageEntry<BufferedImage>> imageList) {
+        // First create the output folders
+        create_output_folders();
+
+        // remember the files that have been written (return of this function)
+        ArrayList<File> out_files = new ArrayList<File>();
+
+        imageList.forEach(i -> {
+            // get the file name as it is in QuPath
+            String image_name = i.getImageName();
+            System.out.println("image name    : " + image_name);
+            // since getImageName is odd, i get the image name from the uri
+            List<URI> uri = null;
+            try {
+                uri = i.getURIs().stream().collect(Collectors.toList());
+            } catch (IOException ex)  {
+                logger.error("Error: could not get image path fro image: " + image_name);
+            }
+            if (uri == null) logger.error("Error: could not read image path for image <" + image_name + ">");
+            else if (uri.size() > 1) logger.error("Error: multiple paths for image <" + image_name + ">: currently not supported");
+            else {
+                // save image to temp folder
+                image_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
+                System.out.println("image name NOW: " + image_name);
+                File out_file = new File(temp_dir, image_name + ".tif");
+                ImageData<BufferedImage> image_data = null;
+                try {
+                    image_data = i.readImageData();
+                } catch (IOException ex) {
+                    throw new RuntimeException("Could not read image data for " + image_name);
+                }
+                try {
+                    ImageWriterTools.writeImage(image_data.getServer(), out_file.getAbsolutePath());
+                    out_files.add(out_file);
+                    logger.trace("Saved image: " + out_file.getAbsolutePath());
+                } catch (IOException ex) {
+                    throw new RuntimeException("Could not write image:" + out_file.getAbsolutePath());
+                }
+                System.out.println("Image should have been written to: " + out_file.getAbsolutePath());
+            }
+            System.out.println("image <"+image_name+"> done; temp_folder_path= " + temp_dir.getAbsolutePath());
+        });
+        // remember the files that have been written (in the class)
+        temp_files = out_files;
+        return out_files;
+    }
+
+    /**
+     * Export images with corresponding masks.
      * @param imageList: List of ProjectImageEntries to be exported
      * @param cropPathClass: String name for Annotation class to be used for region cropping
      * @param fgPathClass: String name for Annotation class used as foreground label
      */
-    public void export_images(List<ProjectImageEntry<BufferedImage>> imageList, String cropPathClass, String fgPathClass) {
+    public void exportImageMaskPair(List<ProjectImageEntry<BufferedImage>> imageList, String cropPathClass, String fgPathClass) {
         // First create the output folders
         create_output_folders();
 

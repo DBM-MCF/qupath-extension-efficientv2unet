@@ -92,7 +92,6 @@ public class EV2UNetTrainCommand implements Runnable {
         project.getPathClasses().forEach(c -> allPathClassesList.add(c.getName()));
         ArrayList<String> validPathClasses  = (ArrayList<String>) allPathClassesList.clone();
         validPathClasses.remove(null);
-        //validPathClasses.forEach(c -> System.out.println("valid ones: " +c));
 
         // Build dialog
         BorderPane mainPane = new BorderPane();
@@ -223,7 +222,7 @@ public class EV2UNetTrainCommand implements Runnable {
         }
 
         OpInEx op = new OpInEx(qupath);
-        op.export_images(selectedImages, cropSelection, fgSelection);
+        op.exportImageMaskPair(selectedImages, cropSelection, fgSelection);
 
         // TODO: start the training
 

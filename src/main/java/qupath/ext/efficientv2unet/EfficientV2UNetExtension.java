@@ -72,20 +72,6 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
                 new Action("Test dialog", e -> new EV2UNetTrainCommand(qupath).run())
         );
 
-        /*
-        // old test entries
-        MenuTools.addMenuItems(
-                qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                new Action("Load a mask to the current image (as Mask annos)", e -> new OpInEx(qupath).load_a_segmentation("", "Mask"))
-        );
-
-        MenuTools.addMenuItems(
-                qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                new Action("Save current image (Mask annos within ROI)", e -> new OpInEx(qupath).write_an_image("ROI", "Mask"))
-        );
-        */
-
-
         // Create preference entry for the python environment   ---------------
         // Get a copy of the options
         EV2UnetSetup options = EV2UnetSetup.getInstance();
@@ -154,12 +140,12 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
     @Override
     public String getName() {
         return "Test my extension name";
-    }
+    } // FIXME
 
     @Override
     public String getDescription() {
         return "Magic happens hopefully";
-    }
+    } // FIXME
 
     @Override
     public Version getQuPathVersion() {
@@ -168,10 +154,12 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
 
     @Override
     public GitHubRepo getRepository() {
+        // FIXME
         return GitHubRepo.create(getName(), "dbm", "qupath-extension-efficient_v2_unet");
     }
 
     private static void openScript(QuPathGUI qupath, String script) {
+        // FIXME
         var editor = qupath.getScriptEditor();
         if (editor == null) {
             logger.error("No script editor is available!");

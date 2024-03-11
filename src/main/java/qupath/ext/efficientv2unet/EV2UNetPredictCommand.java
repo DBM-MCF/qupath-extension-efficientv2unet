@@ -14,6 +14,7 @@ import javafx.scene.layout.GridPane;
 import org.controlsfx.control.ListSelectionView;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
 import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.fx.utils.FXUtils;
@@ -28,6 +29,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
+import java.io.IOException;
 import java.net.URI;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -75,7 +77,6 @@ public class EV2UNetPredictCommand implements Runnable{
     }
 
     public void createAndShowDialog() {
-        System.out.println("-----> Started predict dialog");
         // get the project
         project = qupath.getProject();
         if (project == null) {
@@ -89,7 +90,6 @@ public class EV2UNetPredictCommand implements Runnable{
         project.getPathClasses().forEach(c -> allPathClassesList.add(c.getName()));
         ArrayList<String> validPathClasses  = (ArrayList<String>) allPathClassesList.clone();
         validPathClasses.remove(null);
-        //validPathClasses.forEach(c -> System.out.println("valid ones: " +c));
 
         // Build dialog panes
         BorderPane mainPane = new BorderPane();
@@ -117,12 +117,11 @@ public class EV2UNetPredictCommand implements Runnable{
                     infoModel.setText("");
                     infoModelBest.setText("");
                 }
-
             }
             else {
                 modelFilePathField.setText(modelFilePath.getAbsolutePath());
                 dialog.getDialogPane().lookupButton(btnPredict).setDisable(false);
-                readModelMetadata();
+                readModelMetadata(); // to set the info for the optimal model parameters
             }
         });
         modelFilePathLabel.setLabelFor(modelFilePathField);
@@ -172,7 +171,7 @@ public class EV2UNetPredictCommand implements Runnable{
         ComboBox<String> resolutionCombo = new ComboBox<>();
         resolutionCombo.getItems().setAll("1", "2", "3");
         resolutionCombo.getSelectionModel().selectFirst();
-        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the resolution for the inference (2 = 1/2 original resolution, 3 = 1/3 original resolution)",
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the resolution for the inference (1 = full resolution, 2 = 1/2 original resolution, 3 = 1/3 original resolution)",
                 resolutionLabel, resolutionCombo);
 
         // Image entry pane     ------------------------------------------------
@@ -210,19 +209,24 @@ public class EV2UNetPredictCommand implements Runnable{
         }
 
         // Get the dialog selections
-        System.out.println("-----> Finished predict dialog");
-        String path = modelFilePath.getAbsolutePath();
+        String modelPath = modelFilePath.getAbsolutePath();
         String anno_name = pathClassCombo.getSelectionModel().getSelectedItem();
         boolean doSplit = cbSplitROIs.isSelected();
         boolean doRemove = cbRemoveAnnos.isSelected();
-        ObservableList<ProjectImageEntry<BufferedImage>> imageSelectionList = listSelectionView.getTargetItems();
+        double threshold = thresholdSlider.getValue();
+        int resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
+        List<ProjectImageEntry<BufferedImage>> imageSelectionList = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
 
 
         // FIXME prints
-        System.out.println(path);
+        System.out.println(modelPath);
         System.out.println(anno_name);
         System.out.println("doSplit: " + doSplit);
         System.out.println("doRemove: " + doRemove);
+        System.out.println("threshold: " + threshold);
+        System.out.println("resolution: " + resolution);
+
+
         imageSelectionList.forEach(i -> {
             // get the image file path
             //Collection<URI> uri = null;
@@ -240,8 +244,8 @@ public class EV2UNetPredictCommand implements Runnable{
             System.out.println(uri.get(0).getPath());
 
         });
-
-
+        // Start image prediction (one by one)
+        predictImages(modelPath, threshold, resolution, imageSelectionList, anno_name, doSplit, doRemove);
         //new VirtualEnvironmentRunner() // this works now (had to restart the IDE)
         System.out.println("-----DONE----");
 
@@ -250,6 +254,103 @@ public class EV2UNetPredictCommand implements Runnable{
 
     } // end createAndShowDialog
 
+    public void predictImages(
+            String modelPath,
+            Double threshold,
+            Integer resolution,
+            List<ProjectImageEntry<BufferedImage>> images,
+            String anno_name,
+            boolean doSplit,
+            boolean doRemove) {
+
+        // TODO procedure:
+        /**
+         * For each image, save as tif into a subfolder (with the original name?)
+         *  - map the project entry to the path (or expected output path?)
+         * run the predict cli on the folder
+         * delete the temp files (raw images)
+         * import the masks
+         *
+         * --> have a status bar, as this may take long?!
+         *      - or just a window pop up that says it is working...
+         *
+         */
+
+        OpInEx opInEx = new OpInEx(qupath);
+        // Export the images to the temp folder
+        ArrayList<File> temp_files = opInEx.exportTempImages(images);
+        System.out.println("exported temp images");
+
+
+        // Run the predict CLI
+        VirtualEnvironmentRunner venv;
+        EV2UnetSetup ev2UnetSetup = EV2UnetSetup.getInstance();
+
+        if (ev2UnetSetup.getEv2unetPythonPath().isEmpty()) {
+            throw new IllegalStateException("The EfficientV2UNet python path is empty. Please set it in Edit > Preferences.");
+        }
+
+        venv = new VirtualEnvironmentRunner(ev2UnetSetup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName());
+        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--predict"));
+        args.add("--dir");
+        args.add(opInEx.getTemp_dir());
+        args.add("--model");
+        args.add(modelPath);
+        args.add("--resolution");
+        args.add(resolution.toString());
+        args.add("--threshold");
+        args.add(threshold.toString());
+        args.add("--savedir");
+        args.add(opInEx.getPrediction_dir());
+        args.add("--use_less_memory");
+
+        venv.setArguments(args);
+        try {
+            venv.runCommand();
+        } catch (Exception ex) {
+            logger.error("Exception while running CLI command: ");
+        }
+        // FIXME instead of waitfor have a window pop up that says it is working...
+        //     with maybe while (venv.getProcess().isAlive()) ??
+        try {
+            venv.getProcess().waitFor();
+        } catch (InterruptedException e) {
+            throw new RuntimeException("CLI execution/interrupt error: " + e);
+        }
+        // FIXME Get the log, not really necessary...
+        List<String> log = venv.getProcessLog();
+        System.out.println("Process log: ");
+        for (String line : log) {
+            if (line != "") {
+                System.out.println("\t" + line);
+            }
+        }
+
+        // Delete the temp files
+        opInEx.deleteTempFiles();
+        System.out.println("deleted temp files");
+
+        /*
+        // iterate over images
+        images.forEach(i -> {
+            String imageName = i.getImageName();
+            List<URI> uri = null;
+            try {
+                uri = i.getURIs().stream().collect(Collectors.toList());
+                if (uri.size() > 1) throw new RuntimeException("Error: image " + imageName + " has more than one URI! (currently not supported)");
+            } catch (IOException ex) {
+                logger.error("Error: could not get image path for image: " + imageName + " >> " + ex.getLocalizedMessage());
+            }
+            // process image if uri is not null
+            if (uri != null) {
+                String imagePath = uri.get(0).getPath();
+
+            }
+        });
+        */
+    }
+
+
     /**
      * This function reads the model metadata,
      * and displays information in the UI if found.
@@ -257,8 +358,8 @@ public class EV2UNetPredictCommand implements Runnable{
     private void readModelMetadata() {
         // set the info label for the model name
         infoModelName.setText("Model: " + modelFilePath.getName());
-        String strInfoModel = "\tModel parameters:\t\t\t";
-        String strInfoModelBest = "\tBest checkpoint parameters:\t";
+        String strInfoModel = "-> Model parameters:\t\t\t\t";
+        String strInfoModelBest = "-> Best checkpoint model parameters:\t";
 
         // file if name happens to be the same as selected model
         File file_json = new File(modelFilePath.getParent(), modelFilePath.getName().replace(".h5", ".json"));
@@ -267,67 +368,77 @@ public class EV2UNetPredictCommand implements Runnable{
         Optional<File> file_found = Arrays.stream(dir.listFiles()).filter(f -> f.getName().endsWith(".json")).findFirst();
 
         // Check if same name file as json is present
+        String[] metadata;
         if (file_json.exists()) {
-            System.out.println("found the json file immediately by replacing h5 with json");
-            read_json(file_json);
-        }
-        else if (file_found.isPresent()) {
+            metadata = read_json(file_json);
+            strInfoModel += "Threshold = " + metadata[0] + "; Resolution = " + metadata[1];
+            strInfoModelBest += "Threshold = " + metadata[2] + "; Resolution = " + metadata[3];
+        } else if (file_found.isPresent()) {
             // otherwise try to find any json
-            System.out.println("found another json file");
-            read_json(file_found.get()); // //FIXME this is found, i have to continue here.
+            metadata = read_json(file_found.get());
+            strInfoModel += "Threshold = " + metadata[0] + "; Resolution = " + metadata[1];
+            strInfoModelBest += "Threshold = " + metadata[2] + "; Resolution = " + metadata[3];
+        } else {
+            // else no json-file found
+            strInfoModel += "No metadata json-file found";
+            strInfoModelBest += "No metadata json-file found";
         }
-        else {
-            System.out.println("no json file found");
-            strInfoModel += "No metadata found";
-            strInfoModelBest += "No metadata found";
-        }
-
         infoModel.setText(strInfoModel);
         infoModelBest.setText(strInfoModelBest);
-
     }
 
-    private void read_json(File json_file) {
+    /**
+     * Reads a json file, to find the best metrics metadata
+     * @param json_file
+     * @return String[] with 4 values [normal_thresh, normal_res, best_thresh, best_res]
+     *      also if the (wrong) json file does not contain the needed info,
+     *      the function returns an array with "No metadata found"-values
+     */
+    private String[] read_json(File json_file) {
+        // String array for read metrics [normal_thresh, normal_res, best_thresh, best_res]
+        String[] resultArray = {"No metadata found", "", "No metadata found", ""};
         try {
             // Read file
             Gson gson = new Gson();
             JsonReader reader = new JsonReader(new FileReader(json_file));
-
             // convert the json file into a map
             Map<String, Object> stringObjectMap = gson.fromJson(reader, new TypeToken<Map<String, Object>>() {}.getType());
-            stringObjectMap.keySet().forEach(k -> System.out.println(k + " : " + stringObjectMap.get(k)));
+
             // check if map contains the key 'test_metrics'
             if (!stringObjectMap.containsKey("test_metrics")) {
                 System.out.println("found no test_metrics");
+                logger.trace("No test_metrics found in json file: " + json_file.getAbsolutePath());
             }
-            else System.out.println("found test_metrics");
+            else {
+                // find the values - get the test_metrics dictionary
+                Map<String, Map<String, Map<String, Object>>> test_metrics = (Map<String, Map<String, Map<String, Object>>>) stringObjectMap.get("test_metrics");
+                test_metrics.keySet().forEach(k -> {
+                    // for 'normal' and 'best-ckp' model
+                    if (k.endsWith("best-ckp.h5")) {
+                        // best-ckp model
+                        String res = test_metrics.get(k).get("best_binary_iou_parameters").get("best_resolution").toString();
+                        res = res.substring(res.length() - 1);
+                        resultArray[3] = res;
+                        resultArray[2] = test_metrics.get(k).get("best_binary_iou_parameters").get("best_threshold").toString();
+                    } else if (k.endsWith(".h5")) {
+                        // 'normal' model
+                        String res = test_metrics.get(k).get("best_binary_iou_parameters").get("best_resolution").toString();
+                        res = res.substring(res.length() - 1);
+                        resultArray[1] = res;
+                        resultArray[0] = test_metrics.get(k).get("best_binary_iou_parameters").get("best_threshold").toString();
+                    }
+                    else logger.trace("found key for model name without .h5-ending: " + k);
+                });
+            }
 
         } catch (FileNotFoundException e) {
             logger.error("Could not find JSON file: " + e.getLocalizedMessage());
-        }/* catch (IOException e) {
-            logger.error("JSON IO exception: " + e.getLocalizedMessage());
-        }/* catch (ParseException e) {
-            logger.error("JSON parse error: " + e.getLocalizedMessage());
-        }*/
+        } catch (Exception e) {
+            logger.error("Error during reading of the JSON file: " + e.getLocalizedMessage());
+        }
+        return resultArray;
     }
 
-
-    // FIXME, do I really need this?
-    /**
-     * Make a TextField numeric only.
-     * @param field: TextField
-     */
-    public static void numericField(final TextField field) {
-        field.setPrefColumnCount(4);
-        field.textProperty().addListener(new ChangeListener<String>() {
-            @Override
-            public void changed(ObservableValue<? extends String> observable, String oldValue, String newValue) {
-                if (!newValue.matches("\\d*")) {
-                    field.setText(newValue.replaceAll("[^\\d]", ""));
-                }
-            }
-        });
-    }
 
 
 } // end class
