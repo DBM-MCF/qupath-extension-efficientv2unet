@@ -2,16 +2,15 @@ package qupath.ext.efficientv2unet;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.FileFilter;
 import java.io.IOException;
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
 import ij.IJ;
+import ij.ImagePlus;
 import org.locationtech.jts.geom.Geometry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,10 +27,12 @@ import qupath.lib.gui.tools.GuiTools;
 import qupath.lib.images.servers.LabeledImageServer;
 import qupath.lib.images.writers.ImageWriterTools;
 import qupath.lib.objects.PathObject;
+import qupath.lib.objects.PathObjects;
 import qupath.lib.objects.classes.PathClass;
 import qupath.lib.projects.ProjectImageEntry;
 import qupath.lib.regions.ImagePlane;
 import qupath.lib.regions.RegionRequest;
+import qupath.lib.roi.RoiTools;
 import qupath.lib.roi.interfaces.ROI;
 
 import static qupath.lib.roi.GeometryTools.createRectangle;
@@ -65,6 +66,8 @@ public class OpInEx {
         // get & set the project folder File
         project_dir = retrieve_Project_dir();
         if (project_dir == null) throw new RuntimeException("Please open a project first");
+        // initialize / create output folders
+        create_output_folders();
     }
 
     /**
@@ -112,7 +115,7 @@ public class OpInEx {
      * images_dir = project_folder_path / Efficient_V2_UNet / images
      * masks_dir = project_folder_path / Efficient_V2_UNet / masks
      */
-    private void create_output_folders() {
+    public void create_output_folders() {
         training_root = new File(project_dir, "Efficient_V2_UNet");
         images_dir = new File(training_root, "images");
         masks_dir = new File(training_root, "masks");
@@ -146,8 +149,9 @@ public class OpInEx {
         }
     }
 
+
     /**
-     * Delete temp files
+     * Delete temp files (file list created when using exportTempImages())
      * @return boolean
      */
     public boolean deleteTempFiles() {
@@ -163,6 +167,146 @@ public class OpInEx {
         else return false;
     }
 
+    /**
+     * Delete the prediction files.
+     * (or any list of files)
+     * @param file_list = List of files that need to be deleted. If null, then all tif files in the prediction_dir will be deleted
+     * @return boolean
+     */
+    public boolean deletePredictionFiles(List<File> file_list) {
+        boolean success = true;
+        // if file_list is null, populate the list with all tif files in prediction_dir
+        if (file_list == null) {
+            file_list = getPredictionFiles();
+        }
+        // don't do anything if file_list is empty
+        if (file_list.isEmpty()) return true;
+
+        // delete the files
+        for (File f : file_list) {
+            if (f.delete()) {
+                logger.info("Deleted file: " + f.getAbsolutePath());
+            }
+            else {
+                logger.error("Could not delete file: " + f.getAbsolutePath());
+                success = false;
+            }
+        }
+        return success;
+    }
+
+    /**
+     * Get a list of all tif files in the prediction_dir
+     * @return List<File>
+     */
+    public List<File> getPredictionFiles() {
+        List<File> file_list = List.of(prediction_dir.listFiles(new FileFilter() {
+            @Override
+            public boolean accept(File pathname) {
+                return pathname.getName().endsWith(".tif");
+            }
+        }));
+        return file_list;
+    }
+
+    /**
+     * For a list of mask files, will find the matching QuPath image entry (based on image name),
+     * then load the mask using the load_maskFile function.
+     * @param file_list = List of mask files
+     * @param image_entries = List of ProjectImageEntry
+     * @param doSplit = boolean, whether to split the detected object into individual ones
+     * @param doRemove = boolean, whether to remove ALL existing objects in the QuPath image entry
+     * @param map_anno_class = Map<Integer, String>, map of label id (intestine in mask) mapped to
+     *                         the class name that the that annotation should be added to.
+     */
+    public void batch_load_maskFiles(List<File> file_list, List<ProjectImageEntry<BufferedImage>> image_entries,
+                                     boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        for (File f : file_list) {
+            List<ProjectImageEntry<BufferedImage>> found_entry = image_entries.stream().filter(ie -> ie.getImageName().contains(GeneralTools.stripExtension(f.getName()))).collect(Collectors.toList());
+            if (found_entry.isEmpty()) {
+                logger.error("Could not find image entry for mask file - MASK NOT LOADED: " + f.getAbsolutePath());
+            }
+            else if (found_entry.size() > 1) {
+                logger.error("Found more than one image entry for mask file - MASK NOT LOADED:: " + f.getAbsolutePath());
+            }
+            else {
+                load_maskFile(f, found_entry.get(0), doSplit, doRemove, map_anno_class);
+            }
+        }
+    }
+
+
+    /**
+     * Load a segmentation mask and adds it to a specific QuPath image entry
+     * @param file = File of the mask
+     * @param imageEntry = ProjectImageEntry, of the QuPath image that gets the mask
+     * @param doSplit = boolean, whether to split the detected object into individual ones
+     * @param doRemove = boolean, whether to remove ALL existing objects in the QuPath image entry
+     * @param map_anno_class = Map<Integer, String>, map of label id (intestine in mask) mapped to
+     *                       the class name that the that annotation should be added to.
+     */
+    public void load_maskFile(File file, ProjectImageEntry<BufferedImage> imageEntry,
+                              boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        // Sanity test
+        if (!qupath.getProject().getImageList().contains(imageEntry)) {
+            throw new RuntimeException("Project does not contain image: " + imageEntry.getImageName());
+        }
+
+        // Load mask file
+        ImagePlus mask = IJ.openImage(file.getAbsolutePath());
+
+        // in case the image cannot be opened
+        if (mask == null) throw new RuntimeException("Could not open mask file: " + file.getAbsolutePath());
+
+        SimpleImage image = new PixelImageIJ(mask.getProcessor());
+        ImageData<BufferedImage> imageData = null;
+        // load objects into a Map<AnnotationClassName, List<PathObject>>
+        Map<String, List<PathObject>> annotation_map = new HashMap<>();
+        try {
+            imageData = imageEntry.readImageData();
+            for (int label : map_anno_class.keySet()) {
+                List<PathObject> annotation = ContourTracing.createAnnotations(image, RegionRequest.createAllRequests(imageData.getServer(), 1).get(0), label, label);
+                annotation_map.put(map_anno_class.get(label), annotation);
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException("Could not read imageData from QuPath image: " + imageEntry.getImageName() + " -> " + e);
+        }
+        // sanity test
+        if (imageData == null) {
+            throw new RuntimeException("Image data is null but shouldn't be for image: " + imageEntry.getImageName());
+        }
+
+        // remove existing annotations from the image
+        if (doRemove) imageData.getHierarchy().clearAll();
+
+        // add the objects to the image
+        for (Map.Entry<String, List<PathObject>> entry : annotation_map.entrySet()) {
+            if (!doSplit) {
+                imageData.getHierarchy().addObject(
+                        PathObjects.createAnnotationObject(entry.getValue().get(0).getROI(), PathClass.getInstance(entry.getKey()))
+                );
+            }
+            else {
+                // Create the split ROIs
+                List<ROI> split_ROIs = RoiTools.splitROI(entry.getValue().get(0).getROI());
+                // Convert the ROIs to PathObjects
+                List<PathObject> split_annotations = new ArrayList<>();
+                split_ROIs.forEach(r -> split_annotations.add(
+                        PathObjects.createAnnotationObject(r, PathClass.getInstance(entry.getKey()))
+                ));
+                // Add the PathObjects to the image
+                imageData.getHierarchy().addObjects(split_annotations);
+            }
+        }
+
+        // save the image
+        try {
+            imageEntry.saveImageData(imageData);
+        } catch (IOException e) {
+            logger.error("Could not add (save) the loaded mask to the image: " + imageEntry.getImageName() + " -> " + e);
+        }
+    }
 
     /**
      * Saves a list of images to the temp folder
@@ -171,16 +315,12 @@ public class OpInEx {
      * @return List of saved files
      */
     public ArrayList<File> exportTempImages(List<ProjectImageEntry<BufferedImage>> imageList) {
-        // First create the output folders
-        create_output_folders();
-
         // remember the files that have been written (return of this function)
         ArrayList<File> out_files = new ArrayList<File>();
 
         imageList.forEach(i -> {
             // get the file name as it is in QuPath
             String image_name = i.getImageName();
-            System.out.println("image name    : " + image_name);
             // since getImageName is odd, i get the image name from the uri
             List<URI> uri = null;
             try {
@@ -193,7 +333,6 @@ public class OpInEx {
             else {
                 // save image to temp folder
                 image_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
-                System.out.println("image name NOW: " + image_name);
                 File out_file = new File(temp_dir, image_name + ".tif");
                 ImageData<BufferedImage> image_data = null;
                 try {
@@ -208,9 +347,7 @@ public class OpInEx {
                 } catch (IOException ex) {
                     throw new RuntimeException("Could not write image:" + out_file.getAbsolutePath());
                 }
-                System.out.println("Image should have been written to: " + out_file.getAbsolutePath());
             }
-            System.out.println("image <"+image_name+"> done; temp_folder_path= " + temp_dir.getAbsolutePath());
         });
         // remember the files that have been written (in the class)
         temp_files = out_files;
@@ -224,9 +361,6 @@ public class OpInEx {
      * @param fgPathClass: String name for Annotation class used as foreground label
      */
     public void exportImageMaskPair(List<ProjectImageEntry<BufferedImage>> imageList, String cropPathClass, String fgPathClass) {
-        // First create the output folders
-        create_output_folders();
-
         // loop over the ProjectImageEntries
         imageList.forEach(image -> {
             // get the image name (without extension), and read the image data

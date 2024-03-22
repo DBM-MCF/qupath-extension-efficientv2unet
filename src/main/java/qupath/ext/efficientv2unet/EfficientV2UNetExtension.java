@@ -12,7 +12,7 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- */
+ */ //FIXME
 
 package qupath.ext.efficientv2unet;
 
@@ -30,6 +30,7 @@ import org.controlsfx.control.action.Action;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.InputStream;
 import java.util.LinkedHashMap;
 
 
@@ -46,11 +47,13 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
     private static final Logger logger = LoggerFactory.getLogger(EfficientV2UNetExtension.class);
 
     private static final LinkedHashMap<String, String> SCRIPTS = new LinkedHashMap<>() {{
-        put("EV2UNet test script", "scripts/Efficient_V2_UNet_test_script_template.groovy");
+        put("EV2UNet test script", "scripts/EfficientV2UNet_test_script_template.groovy");
+        put("EV2UNet predict script template", "scripts/EfficientV2UNet_predict_template.groovy");
     }};
 
     @Override
     public void installExtension(QuPathGUI qupath) {
+
 
         MenuTools.addMenuItems(
                 qupath.getMenu("Extensions>Efficient V2 UNet", true),
@@ -64,12 +67,7 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
 
         MenuTools.addMenuItems(
                 qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                new Action("Test venv", e -> new EV2UNetTrainCommand(qupath).runEnv())
-        );
-
-        MenuTools.addMenuItems(
-                qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                new Action("Test dialog", e -> new EV2UNetTrainCommand(qupath).run())
+                new Action("Train a Efficient V2 UNet (work in progress)", e -> new EV2UNetTrainCommand(qupath).run())
         );
 
         // Create preference entry for the python environment   ---------------
@@ -82,7 +80,7 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
         // Set the class options to the current QuPath values
         options.setEv2unetPythonPath(ev2unetPythonPath.get());
 
-        // Listen for changes in QuPath settins
+        // Listen for changes in QuPath settings
         ev2unetPythonPath.addListener((v, o, n) -> options.setEv2unetPythonPath(n));
 
         // Ensure Platform (WIN/UNIX) dependent preference description
@@ -110,8 +108,8 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
         // Add and populate the permanent Preference
         QuPathGUI.getInstance().getPreferencePane().getPropertySheet().getItems().add(ev2unetPathItem);
 
-        /*
-        // I guess this only works once it is really installed...
+
+        // Add template scripts to the Menu
         SCRIPTS.entrySet().forEach(entry -> {
             String script_name = entry.getValue();
             String script_cmd = entry.getKey();
@@ -119,22 +117,15 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
                 String script = new String(stream.readAllBytes(), "UTF-8");
                 if (script != null) {
                     MenuTools.addMenuItems(
-                            qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                            new Action(script_cmd, e -> openScript(qupath, script_name))
-                    );
-                }
-                else {
-
+                            qupath.getMenu("Extensions>Efficient V2 UNet>Script templates", true),
+                            new Action(script_cmd, e -> openScript(qupath, script_name)));
                 }
             } catch (Exception e) {
-                System.out.println("resource stream = " + script_name);
-                System.out.println("There seems to be a problem...");
-                System.out.println(e.toString());
                 logger.error(e.getLocalizedMessage(), e);
             }
         });
 
-        */
+
     }
 
     @Override

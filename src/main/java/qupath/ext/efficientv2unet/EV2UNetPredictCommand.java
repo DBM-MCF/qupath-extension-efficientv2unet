@@ -1,20 +1,19 @@
 package qupath.ext.efficientv2unet;
 
-
-
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
-import javafx.beans.value.ChangeListener;
-import javafx.beans.value.ObservableValue;
-import javafx.collections.ObservableList;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
+import javafx.concurrent.Task;
+import javafx.event.ActionEvent;
 import javafx.scene.control.*;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import org.controlsfx.control.ListSelectionView;
+import org.controlsfx.dialog.ProgressDialog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
 import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.fx.utils.FXUtils;
@@ -29,27 +28,19 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileReader;
-import java.io.IOException;
-import java.net.URI;
 import java.util.*;
+import java.util.concurrent.Future;
 import java.util.stream.Collectors;
-
-// TODO:
-//      - add threshold
-//      - add resolution
-//      - make a builder?
-//      - add text filed that populates once model is selected, showing optimal
-//          threshold and resolution for best and normal model
 
 
 public class EV2UNetPredictCommand implements Runnable{
     private QuPathGUI qupath;
     private String title = "Predict an image with Efficient V2 UNet";
     private static final Logger logger = LoggerFactory.getLogger(EV2UNetPredictCommand.class);
+    private ObjectProperty<Future<?>> runningTask = new SimpleObjectProperty<>();
     private Project<BufferedImage> project;
     private ListSelectionView<ProjectImageEntry<BufferedImage>> listSelectionView;
     private List<ProjectImageEntry<BufferedImage>> availableImageList;
-    private List<ProjectImageEntry<BufferedImage>> previousImages = new ArrayList<>();
 
     // GUI components
     private ComboBox<String> pathClassCombo;
@@ -61,7 +52,14 @@ public class EV2UNetPredictCommand implements Runnable{
     private Label infoModel = new Label();
     private Label infoModelBest = new Label();
 
-
+    // Prediction variables
+    private String modelPath;
+    private Double threshold;
+    private Integer resolution;
+    private String anno_name;
+    private Boolean doSplit;
+    private Boolean doRemove;
+    private List<ProjectImageEntry<BufferedImage>> selectedImages = new ArrayList<>();
 
     /**
      * Constructor
@@ -74,9 +72,11 @@ public class EV2UNetPredictCommand implements Runnable{
     @Override
     public void run() {
         createAndShowDialog();
+        // Start image prediction (one by one)
+        predictImages(); // shows a progress dialog
     }
 
-    public void createAndShowDialog() {
+    private void createAndShowDialog() {
         // get the project
         project = qupath.getProject();
         if (project == null) {
@@ -176,7 +176,7 @@ public class EV2UNetPredictCommand implements Runnable{
 
         // Image entry pane     ------------------------------------------------
         availableImageList = project.getImageList();
-        listSelectionView = ProjectDialogs.createImageChoicePane(qupath, availableImageList, previousImages, null);
+        listSelectionView = ProjectDialogs.createImageChoicePane(qupath, availableImageList, selectedImages, null);
 
 
         // Info text-fields for suggested parameters
@@ -205,149 +205,83 @@ public class EV2UNetPredictCommand implements Runnable{
         // Dialog readout and actions       ------------------------------------
         // If dialog is cancelled
         if (!result.isPresent() || result.get() != btnPredict || result.get() == ButtonType.CANCEL) {
+            logger.warn("dialog was cancelled");
             return;
         }
 
-        // Get the dialog selections
-        String modelPath = modelFilePath.getAbsolutePath();
-        String anno_name = pathClassCombo.getSelectionModel().getSelectedItem();
-        boolean doSplit = cbSplitROIs.isSelected();
-        boolean doRemove = cbRemoveAnnos.isSelected();
-        double threshold = thresholdSlider.getValue();
-        int resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
-        List<ProjectImageEntry<BufferedImage>> imageSelectionList = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
-
-
-        // FIXME prints
-        System.out.println(modelPath);
-        System.out.println(anno_name);
-        System.out.println("doSplit: " + doSplit);
-        System.out.println("doRemove: " + doRemove);
-        System.out.println("threshold: " + threshold);
-        System.out.println("resolution: " + resolution);
-
-
-        imageSelectionList.forEach(i -> {
-            // get the image file path
-            //Collection<URI> uri = null;
-            List<URI> uri = null;
-            try {
-                uri = i.getURIs().stream().collect(Collectors.toList());
-            } catch (Exception e) {
-                logger.error("Error: could not get URI for image: " + i.getImageName() + " >> " + e.getLocalizedMessage());
-            }
-            if (uri.size() > 1) {
-                throw new RuntimeException("Error: more than one URI found for image: " + i.getImageName());
-            }
-
-            // otherwise it should be fine. problem is that i have to loop over the URI collection, i cannot just get the first item
-            System.out.println(uri.get(0).getPath());
-
-        });
-        // Start image prediction (one by one)
-        predictImages(modelPath, threshold, resolution, imageSelectionList, anno_name, doSplit, doRemove);
-        //new VirtualEnvironmentRunner() // this works now (had to restart the IDE)
-        System.out.println("-----DONE----");
-
-        // FIXME - QUESTION: should I export the images to predict to another folder (making sure they are not pyramidal)?
-
+        // Get the dialog selections and set them to the class variables
+        modelPath = modelFilePath.getAbsolutePath();
+        anno_name = pathClassCombo.getSelectionModel().getSelectedItem();
+        doSplit = cbSplitROIs.isSelected();
+        doRemove = cbRemoveAnnos.isSelected();
+        threshold = thresholdSlider.getValue();
+        resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
+        selectedImages = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
 
     } // end createAndShowDialog
 
+    /**
+     * calls the corresponding public method
+     */
+    private void predictImages() {
+        predictImages(modelPath, threshold, resolution, selectedImages, anno_name, doSplit, doRemove);
+    }
+
+    /**
+     * Saves the images to be predicted as tif files into the temp folder.
+     * Calls the predict CLI, which saves the predictions into the predictions folder.
+     * @param model_path: String path to the model h5 file
+     * @param thresh: Double threshold for prediction
+     * @param res: Integer resolution to perform the prediction on, e.g. 1, 2, 3...
+     * @param images: List of ProjectImageEntry that need to be predicted
+     */
     public void predictImages(
-            String modelPath,
-            Double threshold,
-            Integer resolution,
+            String model_path,
+            Double thresh,
+            Integer res,
             List<ProjectImageEntry<BufferedImage>> images,
-            String anno_name,
-            boolean doSplit,
-            boolean doRemove) {
+            String annotationClassName,
+            boolean splitObject,
+            boolean removeExistingAnnotations) {
 
-        // TODO procedure:
-        /**
-         * For each image, save as tif into a subfolder (with the original name?)
-         *  - map the project entry to the path (or expected output path?)
-         * run the predict cli on the folder
-         * delete the temp files (raw images)
-         * import the masks
-         *
-         * --> have a status bar, as this may take long?!
-         *      - or just a window pop up that says it is working...
-         *
-         */
-
+        // create OPs object
         OpInEx opInEx = new OpInEx(qupath);
-        // Export the images to the temp folder
-        ArrayList<File> temp_files = opInEx.exportTempImages(images);
-        System.out.println("exported temp images");
 
+        // predict using the builder
+        var builder = EfficientV2UNet
+                .builder(model_path)
+                .doPredict(true)
+                .setTempDir(opInEx.getTemp_dir())
+                .setPredictOutputDirectory(opInEx.getPrediction_dir())
+                .setResolution(res)
+                .setThreshold(thresh)
+                .setUseLessMemory(true)
+                .setAnnotationClassName(annotationClassName)
+                .doSplitObject(splitObject)
+                .doRemoveExistingAnnotations(removeExistingAnnotations)
+                .build();
 
-        // Run the predict CLI
-        VirtualEnvironmentRunner venv;
-        EV2UnetSetup ev2UnetSetup = EV2UnetSetup.getInstance();
+        PredictTask worker = new PredictTask(builder, images, annotationClassName, splitObject, removeExistingAnnotations, opInEx);
 
-        if (ev2UnetSetup.getEv2unetPythonPath().isEmpty()) {
-            throw new IllegalStateException("The EfficientV2UNet python path is empty. Please set it in Edit > Preferences.");
-        }
-
-        venv = new VirtualEnvironmentRunner(ev2UnetSetup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName());
-        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--predict"));
-        args.add("--dir");
-        args.add(opInEx.getTemp_dir());
-        args.add("--model");
-        args.add(modelPath);
-        args.add("--resolution");
-        args.add(resolution.toString());
-        args.add("--threshold");
-        args.add(threshold.toString());
-        args.add("--savedir");
-        args.add(opInEx.getPrediction_dir());
-        args.add("--use_less_memory");
-
-        venv.setArguments(args);
-        try {
-            venv.runCommand();
-        } catch (Exception ex) {
-            logger.error("Exception while running CLI command: ");
-        }
-        // FIXME instead of waitfor have a window pop up that says it is working...
-        //     with maybe while (venv.getProcess().isAlive()) ??
-        try {
-            venv.getProcess().waitFor();
-        } catch (InterruptedException e) {
-            throw new RuntimeException("CLI execution/interrupt error: " + e);
-        }
-        // FIXME Get the log, not really necessary...
-        List<String> log = venv.getProcessLog();
-        System.out.println("Process log: ");
-        for (String line : log) {
-            if (line != "") {
-                System.out.println("\t" + line);
+        ProgressDialog progress = new ProgressDialog(worker);
+        progress.setWidth(600);
+        progress.initOwner(qupath.getStage());
+        progress.setTitle("Predicting...");
+        progress.getDialogPane().setHeaderText("Predicting...");
+        progress.getDialogPane().setGraphic(null);
+        progress.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        progress.getDialogPane().lookupButton(ButtonType.CANCEL).addEventFilter(ActionEvent.ACTION, e -> {
+            if (Dialogs.showYesNoDialog("Cancel prediction?", "Are you sure you want to cancel the prediction?\nBecause it probably won't work...")) {
+                worker.quietCancel();
+                progress.setHeaderText("Cancelling...");
+                progress.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(true);
             }
-        }
-
-        // Delete the temp files
-        opInEx.deleteTempFiles();
-        System.out.println("deleted temp files");
-
-        /*
-        // iterate over images
-        images.forEach(i -> {
-            String imageName = i.getImageName();
-            List<URI> uri = null;
-            try {
-                uri = i.getURIs().stream().collect(Collectors.toList());
-                if (uri.size() > 1) throw new RuntimeException("Error: image " + imageName + " has more than one URI! (currently not supported)");
-            } catch (IOException ex) {
-                logger.error("Error: could not get image path for image: " + imageName + " >> " + ex.getLocalizedMessage());
-            }
-            // process image if uri is not null
-            if (uri != null) {
-                String imagePath = uri.get(0).getPath();
-
-            }
+            e.consume();
         });
-        */
+
+        // create & run task
+        runningTask.set(qupath.getThreadPoolManager().getSingleThreadExecutor(this).submit(worker));
+        progress.show();
     }
 
 
@@ -439,6 +373,70 @@ public class EV2UNetPredictCommand implements Runnable{
         return resultArray;
     }
 
+   class PredictTask extends Task<Void> {
+        private EfficientV2UNet builder;
+        private List<ProjectImageEntry<BufferedImage>> imagesToPredict;
+        private String annotationClassName;
+        private boolean splitAnnotations;
+        private boolean removeExistingAnnotations;
+        private OpInEx ops;
+        private boolean quietCancel = false;
 
+        public PredictTask(EfficientV2UNet builder, List<ProjectImageEntry<BufferedImage>> imagesToPredict,
+                           String annotationClassName, boolean splitAnnotations, boolean removeExistingAnnotations, OpInEx ops) {
+            this.builder = builder;
+            this.imagesToPredict = imagesToPredict;
+            this.annotationClassName = annotationClassName;
+            this.splitAnnotations = splitAnnotations;
+            this.removeExistingAnnotations = removeExistingAnnotations;
+            this.ops = ops;
+        }
 
-} // end class
+        public void quietCancel() {
+            this.quietCancel = true;
+        }
+       public boolean isQuietlyCancelled() {
+           return quietCancel;
+       }
+
+        @Override
+       protected Void call() {
+            long startTime = System.currentTimeMillis();
+            int count = 0;
+            // Export the images that need to be predicted
+            updateProgress(count, 4);
+            count++;
+            updateMessage("Exporting images...");
+            ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict);
+            System.out.println("exported temp images");
+
+            // start the prediction
+            updateProgress(count, 4);
+            count++;
+            updateMessage("Predicting images...");
+            builder.doPredict();
+            System.out.println("predicted images");
+
+            // load the masks
+            updateProgress(count, 4);
+            count++;
+            updateMessage("Loading predictions");
+            Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotatin class name
+            ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map);
+            System.out.println("loaded predictions");
+            // delete the temp files
+            updateProgress(count, 4);
+            count++;
+            updateMessage("Deleting temp files...");
+            ops.deleteTempFiles();
+            ops.deletePredictionFiles(ops.getPredictionFiles());
+            System.out.println("deleted temp files");
+
+            long endTime = System.currentTimeMillis();
+            System.out.println("Predict took " + (endTime - startTime) + " ms");
+            return null;
+        }
+
+   }
+
+} // end (main) class
