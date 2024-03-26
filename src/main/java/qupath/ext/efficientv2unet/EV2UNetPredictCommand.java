@@ -5,6 +5,7 @@ import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
+import javafx.collections.ListChangeListener;
 import javafx.concurrent.Task;
 import javafx.event.ActionEvent;
 import javafx.scene.control.*;
@@ -71,18 +72,22 @@ public class EV2UNetPredictCommand implements Runnable{
 
     @Override
     public void run() {
-        createAndShowDialog();
+        if (!createAndShowDialog()) return;
         // Start image prediction (one by one)
         predictImages(); // shows a progress dialog
     }
 
-    private void createAndShowDialog() {
+    /**
+     * Create and show a dialog for predicting images from a selection.
+     * @return boolean: true if the dialog was not cancelled
+     */
+    private boolean createAndShowDialog() {
         // get the project
         project = qupath.getProject();
         if (project == null) {
             logger.error("No project selected");
             GuiTools.showNoProjectError("Please open a project first");
-            return;
+            return false;
         }
 
         // get a list of annotation classes in the project
@@ -123,6 +128,10 @@ public class EV2UNetPredictCommand implements Runnable{
                 dialog.getDialogPane().lookupButton(btnPredict).setDisable(false);
                 readModelMetadata(); // to set the info for the optimal model parameters
             }
+            // deactivate the predict button if no image is selected
+            if (listSelectionView.getTargetItems().isEmpty()) {
+                dialog.getDialogPane().lookupButton(btnPredict).setDisable(true);
+            }
         });
         modelFilePathLabel.setLabelFor(modelFilePathField);
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Path to the model (.h5) file",
@@ -147,9 +156,9 @@ public class EV2UNetPredictCommand implements Runnable{
 
         // Chooser for removing existing ROIs
         CheckBox cbRemoveAnnos = new CheckBox("Remove existing Objects");
-        cbRemoveAnnos.setTooltip(new Tooltip("Remove all existing Objects before adding the predicted objects"));
+        cbRemoveAnnos.setTooltip(new Tooltip("Remove ALL existing Objects before adding the predicted objects"));
         cbRemoveAnnos.setSelected(false);
-        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Remove all existing Objects before adding the predicted objects",
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Remove ALL existing Objects before adding the predicted objects",
                 cbRemoveAnnos, cbRemoveAnnos, cbRemoveAnnos);
 
         // Slider for threshold
@@ -177,7 +186,19 @@ public class EV2UNetPredictCommand implements Runnable{
         // Image entry pane     ------------------------------------------------
         availableImageList = project.getImageList();
         listSelectionView = ProjectDialogs.createImageChoicePane(qupath, availableImageList, selectedImages, null);
-
+        // Enable predict button only if target item selected
+        listSelectionView.getTargetItems().addListener(new ListChangeListener<ProjectImageEntry<BufferedImage>>() {
+            @Override
+            public void onChanged(Change<? extends ProjectImageEntry<BufferedImage>> change) {
+                if (listSelectionView.getTargetItems().isEmpty()) {
+                    dialog.getDialogPane().lookupButton(btnPredict).setDisable(true);
+                }
+                else if (modelFilePathField.getText().isEmpty() || modelFilePathField.getText() == null) {
+                    dialog.getDialogPane().lookupButton(btnPredict).setDisable(true);
+                }
+                else dialog.getDialogPane().lookupButton(btnPredict).setDisable(false);
+            }
+        });
 
         // Info text-fields for suggested parameters
         GridPaneUtils.addGridRow(infoPane, 0, 0, "Name of the currently selected model", infoModelName);
@@ -206,7 +227,7 @@ public class EV2UNetPredictCommand implements Runnable{
         // If dialog is cancelled
         if (!result.isPresent() || result.get() != btnPredict || result.get() == ButtonType.CANCEL) {
             logger.warn("dialog was cancelled");
-            return;
+            return false;
         }
 
         // Get the dialog selections and set them to the class variables
@@ -217,11 +238,12 @@ public class EV2UNetPredictCommand implements Runnable{
         threshold = thresholdSlider.getValue();
         resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
         selectedImages = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
+        return true;
 
     } // end createAndShowDialog
 
     /**
-     * calls the corresponding public method
+     * calls the corresponding public method, with the variables defined in the dialog
      */
     private void predictImages() {
         predictImages(modelPath, threshold, resolution, selectedImages, anno_name, doSplit, doRemove);
@@ -247,10 +269,11 @@ public class EV2UNetPredictCommand implements Runnable{
         // create OPs object
         OpInEx opInEx = new OpInEx(qupath);
 
-        // predict using the builder
+        // Predict using the builder
         var builder = EfficientV2UNet
-                .builder(model_path)
+                .builder()
                 .doPredict(true)
+                .setModelPath(model_path)
                 .setTempDir(opInEx.getTemp_dir())
                 .setPredictOutputDirectory(opInEx.getPrediction_dir())
                 .setResolution(res)
@@ -261,6 +284,7 @@ public class EV2UNetPredictCommand implements Runnable{
                 .doRemoveExistingAnnotations(removeExistingAnnotations)
                 .build();
 
+        // Create task for predicting (with custom class below)
         PredictTask worker = new PredictTask(builder, images, annotationClassName, splitObject, removeExistingAnnotations, opInEx);
 
         ProgressDialog progress = new ProgressDialog(worker);
@@ -272,9 +296,9 @@ public class EV2UNetPredictCommand implements Runnable{
         progress.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
         progress.getDialogPane().lookupButton(ButtonType.CANCEL).addEventFilter(ActionEvent.ACTION, e -> {
             if (Dialogs.showYesNoDialog("Cancel prediction?", "Are you sure you want to cancel the prediction?\nBecause it probably won't work...")) {
-                worker.quietCancel();
                 progress.setHeaderText("Cancelling...");
                 progress.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(true);
+                worker.cancel(true);
             }
             e.consume();
         });
@@ -340,8 +364,7 @@ public class EV2UNetPredictCommand implements Runnable{
 
             // check if map contains the key 'test_metrics'
             if (!stringObjectMap.containsKey("test_metrics")) {
-                System.out.println("found no test_metrics");
-                logger.trace("No test_metrics found in json file: " + json_file.getAbsolutePath());
+                logger.info("No test_metrics found in json file: " + json_file.getAbsolutePath());
             }
             else {
                 // find the values - get the test_metrics dictionary
@@ -373,6 +396,10 @@ public class EV2UNetPredictCommand implements Runnable{
         return resultArray;
     }
 
+    /**
+     * Task class for predicting images.
+     *
+     */
    class PredictTask extends Task<Void> {
         private EfficientV2UNet builder;
         private List<ProjectImageEntry<BufferedImage>> imagesToPredict;
@@ -382,6 +409,15 @@ public class EV2UNetPredictCommand implements Runnable{
         private OpInEx ops;
         private boolean quietCancel = false;
 
+        /**
+         * Constructor
+         * @param builder: EfficientV2UNet builder
+         * @param imagesToPredict: List of ProjectImageEntry of images to predict
+         * @param annotationClassName: String for the annotation class
+         * @param splitAnnotations: boolean specifying whether to split the new objects
+         * @param removeExistingAnnotations: boolean specifying whether to remove existing annotations
+         * @param ops: OpInEx object
+         */
         public PredictTask(EfficientV2UNet builder, List<ProjectImageEntry<BufferedImage>> imagesToPredict,
                            String annotationClassName, boolean splitAnnotations, boolean removeExistingAnnotations, OpInEx ops) {
             this.builder = builder;
@@ -392,13 +428,10 @@ public class EV2UNetPredictCommand implements Runnable{
             this.ops = ops;
         }
 
-        public void quietCancel() {
-            this.quietCancel = true;
-        }
-       public boolean isQuietlyCancelled() {
-           return quietCancel;
-       }
-
+       /**
+        * Called when task is started
+        * @return null
+        */
         @Override
        protected Void call() {
             long startTime = System.currentTimeMillis();
@@ -408,32 +441,32 @@ public class EV2UNetPredictCommand implements Runnable{
             count++;
             updateMessage("Exporting images...");
             ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict);
-            System.out.println("exported temp images");
+            logger.info("Exported temp images.");
 
             // start the prediction
             updateProgress(count, 4);
             count++;
             updateMessage("Predicting images...");
             builder.doPredict();
-            System.out.println("predicted images");
+            logger.info("Predicted images.");
 
             // load the masks
             updateProgress(count, 4);
             count++;
-            updateMessage("Loading predictions");
+            updateMessage("Loading predictions.");
             Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotatin class name
             ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map);
-            System.out.println("loaded predictions");
+            logger.info("Loaded predictions.");
             // delete the temp files
             updateProgress(count, 4);
             count++;
             updateMessage("Deleting temp files...");
             ops.deleteTempFiles();
             ops.deletePredictionFiles(ops.getPredictionFiles());
-            System.out.println("deleted temp files");
+            logger.info("Deleted temp files.");
 
             long endTime = System.currentTimeMillis();
-            System.out.println("Predict took " + (endTime - startTime) + " ms");
+            logger.info("Predict took " + (endTime - startTime) / 1000 + " seconds.");
             return null;
         }
 

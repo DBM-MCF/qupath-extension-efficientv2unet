@@ -110,6 +110,30 @@ public class OpInEx {
     }
 
     /**
+     * Getter for the training image dir
+     * @return String of training image dir
+     */
+    public String getImages_dir() {
+        return images_dir.getAbsolutePath();
+    }
+
+    /**
+     * Getter for the training mask dir
+     * @return String of training mask dir
+     */
+    public String getMasks_dir() {
+        return masks_dir.getAbsolutePath();
+    }
+
+    /**
+     * Getter for the training root dir (aka. base_dir)
+     * @return String of training root dir
+     */
+    public String getTraining_root() {
+        return training_root.getAbsolutePath();
+    }
+
+    /**
      * Creates output folders
      * training_root = project_folder_path / Efficient_V2_UNet
      * images_dir = project_folder_path / Efficient_V2_UNet / images
@@ -142,7 +166,8 @@ public class OpInEx {
         boolean hasTifMasks = Arrays.stream(masks_dir.listFiles()).toList().stream().anyMatch(f -> f.getName().endsWith(".tif"));
 
         if (hasTifImages || hasTifMasks) {
-            if (Dialogs.showConfirmDialog("TIF images already exist", "The output folders already contain images.\nImages may be overwritten.\n'OK' to delete, 'Cancel' to keep them")) {
+            if (!Dialogs.showYesNoDialog("TIF images already exist", "The output folders already contain images.\nImages may be overwritten.\nDo you want to keep the images?\nPress 'No' to delete them.")) {
+                // Does not delete subfolders
                 Arrays.stream(images_dir.listFiles()).toList().forEach(File::delete);
                 Arrays.stream(masks_dir.listFiles()).toList().forEach(File::delete);
             }
@@ -201,6 +226,25 @@ public class OpInEx {
      */
     public List<File> getPredictionFiles() {
         List<File> file_list = List.of(prediction_dir.listFiles(new FileFilter() {
+            @Override
+            public boolean accept(File pathname) {
+                return pathname.getName().endsWith(".tif");
+            }
+        }));
+        return file_list;
+    }
+
+    /**
+     * Get a list of tif files in a folder
+     * @param folder_path: String path to folder
+     * @return List<File>
+     */
+    public List<File> getTifFilesInFolder(String folder_path) {
+        File file_path = new File(folder_path);
+        if (!file_path.exists()) {
+            return null;
+        }
+        List<File> file_list = List.of(file_path.listFiles(new FileFilter() {
             @Override
             public boolean accept(File pathname) {
                 return pathname.getName().endsWith(".tif");
@@ -357,7 +401,7 @@ public class OpInEx {
     /**
      * Export images with corresponding masks.
      * @param imageList: List of ProjectImageEntries to be exported
-     * @param cropPathClass: String name for Annotation class to be used for region cropping
+     * @param cropPathClass: String name for Annotation class to be used for region cropping (or null if no cropping)
      * @param fgPathClass: String name for Annotation class used as foreground label
      */
     public void exportImageMaskPair(List<ProjectImageEntry<BufferedImage>> imageList, String cropPathClass, String fgPathClass) {

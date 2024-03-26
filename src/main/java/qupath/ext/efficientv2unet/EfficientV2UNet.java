@@ -43,10 +43,11 @@ public class EfficientV2UNet {
     private static final Logger logger = LoggerFactory.getLogger(EfficientV2UNet.class);
 
     public static class Builder {
-        Project<BufferedImage> project;
+        private Project<BufferedImage> project;
+        private final List<String> BASEMODELS = new ArrayList<String>(Arrays.asList("b0", "b1", "b2", "b3", "s", "m", "l"));
+
         // General settings
         private final transient EV2UnetSetup setup;
-        private String model_path;
         private boolean train = false;
         private boolean predict = false;
         // Train settings
@@ -55,7 +56,9 @@ public class EfficientV2UNet {
         private String base_dir;
         private String name;
         private Integer epochs;
+        private String basemodel;
         // Predict settings
+        private String model_path;
         private String predict_dir;
         private String predict_out_dir;
         private Integer resolution;
@@ -68,14 +71,25 @@ public class EfficientV2UNet {
 
 
         /**
+         * @Deprecated - should not use this, as model_path variable is specific to predict only
          * Constructor
          *
          * @param model_path: String path of the model
-         */
+         *
         protected Builder(String model_path) {
             this.model_path = model_path;
             this.setup = EV2UnetSetup.getInstance();
         }
+        */
+
+        /**
+         * Constructor
+         *
+         */
+        protected Builder() {
+            this.setup = EV2UnetSetup.getInstance();
+        }
+
 
         /**
          * Specify whether to train a model
@@ -144,6 +158,16 @@ public class EfficientV2UNet {
         }
 
         /**
+         * Specify the base model (B0, B1, B2, B3, S, M or L)
+         * @param basemodel: String
+         * @return this builder
+         */
+        public Builder setBasemodel(String basemodel) {
+            this.basemodel = basemodel;
+            return this;
+        }
+
+        /**
          * Specify the number of epochs to train a model
          *
          * @param epochs: Integer
@@ -151,6 +175,17 @@ public class EfficientV2UNet {
          */
         public Builder setEpochs(Integer epochs) {
             this.epochs = epochs;
+            return this;
+        }
+
+        /**
+         * Specify the path to the model
+         *
+         * @param model_path: String path to h5 model file
+         * @return this builder
+         */
+        public Builder setModelPath(String model_path) {
+            this.model_path = model_path;
             return this;
         }
 
@@ -258,13 +293,6 @@ public class EfficientV2UNet {
 
             EfficientV2UNet ev2unet = new EfficientV2UNet();
 
-            // check if model path exists
-            if (model_path == null) {
-                throw new IllegalArgumentException("Model path cannot be null");
-            }
-            else if ( !new File(model_path).exists()) {
-                throw new IllegalArgumentException("Model path does not exist: " + model_path);
-            }
             // check that the setup is fine
             if (setup.getEv2unetPythonPath().isEmpty()) {
                 throw new IllegalStateException("The EfficientV2UNet python path is empty. Please set it in Edit > Preferences.");
@@ -276,11 +304,56 @@ public class EfficientV2UNet {
             }
             // Training             --------------------------------------------
             else if (train) {
-                logger.error("Training not yet implemented");
+                logger.error("Training not yet implemented"); // FIXME
+                // TODO check training parameters. Should I already check if the folders exist?
+
+                // Check if the train image dir exists
+                if (train_image_dir == null || !new File(train_image_dir).exists()) {
+                    throw new IllegalArgumentException("Training image directory does not exist: " + train_image_dir);
+                }
+                // Check if the train mask dir exists
+                if (train_mask_dir == null || !new File(train_mask_dir).exists()) {
+                    throw new IllegalArgumentException("Training mask directory does not exist: " + train_mask_dir);
+                }
+                // Check the base_dir
+                if (base_dir == null) {
+                    base_dir = new File(project.getPath().getParent().toString(), "models").getAbsolutePath();
+                    logger.info("Set the base directory to default: " + base_dir);
+                }
+                // Check basemodel
+                if (basemodel == null) {
+                    basemodel = "b0";
+                    logger.info("Set the base model to default: " + basemodel);
+                }
+                else if (!BASEMODELS.contains(basemodel.toLowerCase())) {
+                    throw new IllegalArgumentException("Invalid base model: " + basemodel);
+                }
+                else basemodel = basemodel.toLowerCase();
+                // Check desired model name
+                if (name == null) {
+                    name = "EfficientV2UNet_" + basemodel;
+                    logger.info("Set the model name to default: " + name);
+                }
+                // Check epochs
+                if (epochs == null) {
+                    epochs = 50;
+                    logger.info("Set the number of epochs to default: " + epochs);
+                }
+                else if (epochs <= 0) {
+                    throw new IllegalArgumentException("Invalid number of epochs: " + epochs);
+                }
             }
 
             // Predict               -------------------------------------------
             else {
+                // check if model path exists
+                if (model_path == null) {
+                    throw new IllegalArgumentException("Model path cannot be null");
+                }
+                else if ( !new File(model_path).exists()) {
+                    throw new IllegalArgumentException("Model path does not exist: " + model_path);
+                }
+
                 // Set the default temp directory (QuPathProject/temp) if not specified (and create it if it doesn't exist)
                 if (predict_dir == null) {
                     predict_dir = new File(project.getPath().getParent().toString(), "temp").getAbsolutePath();
@@ -324,6 +397,7 @@ public class EfficientV2UNet {
             ev2unet.train_mask_dir = train_mask_dir;
             ev2unet.base_dir = base_dir;
             ev2unet.name = name;
+            ev2unet.basemodel = basemodel;
             ev2unet.epochs = epochs;
             ev2unet.predict_dir = predict_dir;
             ev2unet.predict_out_dir = predict_out_dir;
@@ -352,6 +426,7 @@ public class EfficientV2UNet {
     private String train_image_dir;
     private String train_mask_dir;
     private String base_dir;
+    private String basemodel;
     private String name;
     private Integer epochs;
     // Predict settings
@@ -367,11 +442,10 @@ public class EfficientV2UNet {
 
     /**
      * Create a builder to customize EfficientV2UNet parameters
-     * @param model_path: String path to h5 model file
      * @return
      */
-    public static Builder builder(String model_path) {
-        return new Builder(model_path);
+    public static Builder builder() {
+        return new Builder();
     }
 
     // EfficientV2UNet methods (e.g. to process) // TODO split into subproceses that are controlled via main one.
@@ -385,7 +459,11 @@ public class EfficientV2UNet {
         }
 
         if (this.train) {
-            throw new RuntimeException("Training is not yet implemented!");
+            //throw new RuntimeException("Training is not yet implemented!"); // FIXME
+            // FIXME not sure if I should check if tif files exist here or ignore it
+            logger.info("Start training");
+            doTrain();
+            logger.info("Finished training");
         }
         // Predict the current image
         else {
@@ -496,9 +574,47 @@ public class EfficientV2UNet {
         List<String> log = venv.getProcessLog();
         System.out.println("Prediction finished!");
     }
-    private void doTrain() {
-        System.out.println("not yet implemented");
-        throw new RuntimeException("Training not yet implemented");
+
+    /**
+     * Run the training.
+     *
+     */
+    public void doTrain() {
+        VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
+                setup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName()
+        );
+        // build the cli arguments
+        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
+        args.add("--images");
+        args.add(train_image_dir);
+        args.add("--masks");
+        args.add(train_mask_dir);
+        args.add("--basedir");
+        args.add(base_dir);
+        args.add("--name");
+        args.add(name);
+        args.add("--basemodel");
+        args.add(basemodel);
+        args.add("--epochs");
+        args.add(epochs.toString());
+
+        // run the command
+        venv.setArguments(args);
+        try {
+            venv.runCommand();
+        } catch (IOException e) {
+            logger.error("Exception while running the CLI command: " + e.getLocalizedMessage());
+        }
+        // FIXME would be nice to have the progress dialog here...? probably not possible...
+        // wait for the command to finish
+        try {
+            venv.getProcess().waitFor();
+        } catch (InterruptedException e) {
+            throw new RuntimeException("CLI execution/interruption error: " + e);
+        }
+        List<String> log = venv.getProcessLog();
+        System.out.println("Prediction finished!");
+
     }
 
 
