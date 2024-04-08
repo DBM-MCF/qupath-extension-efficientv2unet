@@ -12,6 +12,7 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.GridPane;
 import org.controlsfx.control.ListSelectionView;
 import org.controlsfx.dialog.ProgressDialog;
+import org.controlsfx.tools.Platform;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
@@ -54,13 +55,12 @@ public class EV2UNetTrainCommand implements Runnable {
     private Project<BufferedImage> project;
     private ListSelectionView<ProjectImageEntry<BufferedImage>> listSelectionView;
     private List<ProjectImageEntry<BufferedImage>> previousImages = new ArrayList<>();
-
-    // onw class variables
     List<ProjectImageEntry<BufferedImage>> availableImageList = new ArrayList<>();
 
 
     // GUI
     private Dialog<ButtonType> dialog = null;
+    private Boolean export_only = false;
     // own GUI elements
     private ComboBox<String> pathClassCropCombo;
     private ComboBox<String> pathClassFGCombo;
@@ -89,7 +89,15 @@ public class EV2UNetTrainCommand implements Runnable {
     @Override
     public void run() {
         if (!createAndShowDialog()) return;
-        // Start exporing and training
+        // Only export if selected
+        if (export_only) {
+            OpInEx ops = new OpInEx(qupath);
+            ops.exportImageMaskPair(selectedImages, cropSelection, fgSelection);
+            Dialogs.showConfirmDialog("Image/Mask paris exported", "The image/mask paris have been exported to\n " +
+                    ops.getImages_dir() + "\n" + ops.getMasks_dir() + "\nrespectively.");
+            return;
+        }
+        // Start exporting and training
         train();
     }
 
@@ -123,7 +131,14 @@ public class EV2UNetTrainCommand implements Runnable {
 
         // options pane     ----------------------------------------------------
         int row = 0;
-        // First row, choosing the PathClass for image cropping
+        // First row, option to save image/mask paris only
+        CheckBox cbExportOnly = new CheckBox("Only export image / mask pairs?");
+        cbExportOnly.setTooltip(new Tooltip("No training, only exporting image / mask pairs"));
+        cbExportOnly.setSelected(false);
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Option to only export image / mask pairs",
+                cbExportOnly, cbExportOnly, cbExportOnly);
+
+        // Second row, choosing the PathClass for image cropping
         Label cropChoiceLabel = new Label("Region for image cropping (optional)");
         pathClassCropCombo = new ComboBox<>();
         pathClassCropCombo.getItems().setAll(allPathClassesList);
@@ -132,7 +147,7 @@ public class EV2UNetTrainCommand implements Runnable {
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the kind of Annotation class used for image cropping.",
                 cropChoiceLabel, cropChoiceLabel, cropChoiceLabel, pathClassCropCombo);
 
-        // Second row, choosing the foreground path class
+        // Third row, choosing the foreground path class
         Label fgChoiceLabel = new Label("Foreground Annotation class");
         pathClassFGCombo = new ComboBox<>();
         pathClassFGCombo.getItems().setAll(validPathClasses);
@@ -231,6 +246,7 @@ public class EV2UNetTrainCommand implements Runnable {
         }
 
         // Get the dialog selections
+        export_only = cbExportOnly.isSelected();
         cropSelection = pathClassCropCombo.getSelectionModel().getSelectedItem();
         fgSelection = pathClassFGCombo.getSelectionModel().getSelectedItem();
         baseModel = baseModelMap.get(baseModelCombo.getSelectionModel().getSelectedItem());
@@ -242,58 +258,8 @@ public class EV2UNetTrainCommand implements Runnable {
 
         return true;
 
-        /*
-        // FIXME remove that stuff
-        System.out.println("Crop selection: " + cropSelection);
-        System.out.println("Foreground selection: " + fgSelection);
-        System.out.println("Model choice: " + baseModel);
-        System.out.println("Epochs: " + epochs);
-        System.out.println("Selected images size: " + selectedImages.size());
-
-        if (selectedImages.size() > 0) return false; // FIXME temp
-
-        if (selectedImages.isEmpty()) {
-            logger.warn("No images were selected for exporting and training.");
-            return false;
-        }
-
-        OpInEx op = new OpInEx(qupath);
-        op.exportImageMaskPair(selectedImages, cropSelection, fgSelection);
-        return true;
-        */
-
     } // end createAndShowDialog
 
-
-    // FIXME, this method should probably be private (once it is not in the menu anymore...)
-    public void runEnv() {
-        VirtualEnvironmentRunner venv;
-        EV2UnetSetup ev2UnetSetup = EV2UnetSetup.getInstance();
-
-        if (ev2UnetSetup.getEv2unetPythonPath().isEmpty()) {
-            throw new IllegalStateException("The EfficientV2UNet python path is empty. Please set it in Edit > Preferences.");
-        }
-
-        // create the venv
-        venv = new VirtualEnvironmentRunner(ev2UnetSetup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName());
-
-
-        // create command, example: start napari
-        String runCommand;
-        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m"));
-        args.add("napari");
-
-        venv.setArguments(args);
-        String[] theLog = new String[0];
-        try {
-            //theLog = venv.runCommand(); // this was modified in version 0.9.2
-            venv.runCommand(); // now this function has no return
-        } catch (Exception ex) {
-            System.out.println("Exception in runEnv: " + ex.getLocalizedMessage());
-        }
-        logger.info("python command finished");
-
-    }
 
 
     /**
@@ -368,12 +334,16 @@ public class EV2UNetTrainCommand implements Runnable {
 
         ProgressDialog progress = new ProgressDialog(worker);
         progress.initOwner(qupath.getStage());
-        progress.setTitle("Training...");
+        if (Platform.getCurrent() == Platform.OSX) progress.setTitle("Training... (May not work on OSX)");
+        else progress.setTitle("Training...");
         progress.getDialogPane().setHeaderText("Training...\nImages will be saved to your project folder.");
         progress.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
         progress.getDialogPane().setGraphic(null);
-        progress.setWidth(600);
+        progress.setWidth(600); // this does not work...
         progress.setHeight(400);
+        progress.setResizable(true);
+
+        // Actions on cancel
         progress.getDialogPane().lookupButton(ButtonType.CANCEL).addEventFilter(ActionEvent.ACTION, e -> {
             if (worker.error > 1) {
                 progress.setHeaderText("Cancelling...");
@@ -399,18 +369,27 @@ public class EV2UNetTrainCommand implements Runnable {
                 throw new RuntimeException("Not enough training images!\nYou need at least 3 training images to train the model.");
             }
             else if (worker.error == 3) {
-                throw new RuntimeException("Crop sub-folders present!\nPlease delete following folders:\n-"+ worker.ops.getImages_dir() + "/crops\n-" +worker.ops.getMasks_dir() + "crops\nand try again.");
+                throw new RuntimeException("Data already split into train/val/test folders present!\n" +
+                        "Please move images from sub-folders in 'yourProject/Efficient_V2_UNet/images' to the images folder and delete the sub-folders.\n" +
+                        "Please move images from sub-folders in 'yourProject/Efficient_V2_UNet/masks' to the masks folder and delete the sub-folders.\n" +
+                        "Then cancel and try again.");
             }
             else if (worker.error == 4) {
                 throw new IllegalStateException("The EfficientV2UNet python path is empty. Please set it in Edit > Preferences.");
             }
             else if (worker.error == 5) {
                 throw new RuntimeException("CLI execution/interruption error...");
-
             }
         }
-        else logger.info("Finished training!");
-
+        else {
+            logger.info("Finished training!");
+            OpInEx ops = worker.getOps();
+            String path = "EfficientV2UNet_" + base_model + "_epochs" + epochs;
+            path = ops.getTraining_root() + "/models/" + path;
+            Dialogs.showConfirmDialog("Finished training!", "Your EfficientV2UNet models were saved to:\n" +
+                    path + "\nImages were stored to:\n" + ops.getImages_dir() + " \nand\n" + ops.getMasks_dir());
+            logger.trace("The EfficientV2UNet models were saved to:\n"  + path + "\nImages were stored to:\n" + ops.getImages_dir() + " \nand\n" + ops.getMasks_dir());
+        }
     }
 
     class TrainTask extends Task<Void> {
@@ -447,19 +426,57 @@ public class EV2UNetTrainCommand implements Runnable {
             this.ops = new OpInEx(qupath);
         }
 
+        /**
+         * Getter for OpInEx
+         * @return OpInEx
+         */
+        public OpInEx getOps() {
+            return ops;
+        }
+
         @Override
         public boolean cancel(boolean b) {
             this.error = 0;
             return super.cancel(b);
         }
 
+        public boolean dataAlreadySplit(String path) {
+            if (new File(path, "train").exists()) return true;
+            else if (new File(path, "train").exists()) return true;
+            else if (new File(path, "train").exists()) return true;
+            else return false;
+        }
+
+        private void read_metrics(File json_file) {
+            // TODO implement, but it is not super necessary
+        }
+
         @Override
-        protected Void call() throws Exception {
+        protected Void call() {
+
+            // FIXME TEMP for testing the read_metrics() -> to show them at the end of the training.
+            /*
+            // try to show metrics
+            File json_file = new File(ops.getTraining_root(), "models/EfficientV2UNet_"+base_model+"_epochs"+epochs+"/EfficientV2UNet_"+base_model+"_epochs"+epochs+".json");
+            System.out.println("should be folder: " + json_file.getAbsolutePath());
+            // temp overwriting with existing file
+            json_file = new File(qupath.getProject().getPath().getParent().toFile(), "models/b3_Ntrain66_Nval14_Ntest14_epochs200/b3_Ntrain66_Nval14_Ntest14_epochs200.json");
+            System.out.println("poject folder exists: " + json_file.exists() + ": " + json_file.getAbsolutePath());
+            read_metrics(json_file);
+
+            if (2==2) return null;
+            */
+            //FIXME TEMP
+
             // Check that the environment was set up properly
             if (setup.getEv2unetPythonPath().isEmpty()) {
                 this.error = 4;
                 updateMessage("The EfficientV2UNet python path is empty.\nPlease set it in\nEdit > Preferences.");
-                TimeUnit.SECONDS.sleep(30);
+                try {
+                    TimeUnit.SECONDS.sleep(30);
+                } catch (InterruptedException e) {
+                    this.error = 4;
+                }
                 return null;
             }
             long startTime = System.currentTimeMillis();
@@ -468,31 +485,37 @@ public class EV2UNetTrainCommand implements Runnable {
             updateProgress(count, 2);
             count++;
             updateMessage("Exporting images");
-// FIXME it's not image/crops, it's images/train-val-test/crops
-//   I should test if the train/val/test dirs exist and tell the user to reorganise the folder....
-/*
-            // Check if there are the crop folders inside the image/mask dirs (if they are present command line would throw an error)
-            boolean image_crop_exists = new File(ops.getImages_dir(), "crops").exists();
-            boolean mask_crop_exists = new File(ops.getMasks_dir(), "crops").exists();
-            if (image_crop_exists || mask_crop_exists) {
+
+            // Check if data has already been split
+            boolean image_subdir_exists = dataAlreadySplit(ops.getImages_dir());
+            boolean mask_subdir_exists = dataAlreadySplit(ops.getMasks_dir());
+
+            if (image_subdir_exists || mask_subdir_exists) {
                 this.error = 3;
-                String message = "Crop folders exist!\nPlease delete following folders manually\nfrom your project folder:\n";
-                if (image_crop_exists) message += " - " + "../Efficient_V2_UNet/images/crops\n";
-                if (mask_crop_exists) message += " - " + "../Efficient_V2_UNet/masks/crops\n";
-                message += "Cancel and try again.";
-                updateMessage(message);
-                TimeUnit.MINUTES.sleep(1);
+                String msg = "Training data has already been organised into\ntrain, validation and test sets.\n";
+                if (image_subdir_exists) msg += "Please move the images in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/images'\nand delete the sub-folders.\n";
+                if (mask_subdir_exists) msg += "Please move the masks in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/masks'\nand delete the sub-folders.\n";
+                msg += "Then cancel and try again.";
+                updateMessage(msg);
+                try {
+                    TimeUnit.MINUTES.sleep(1);
+                } catch (InterruptedException e) {
+                    this.error = 3;
+                }
                 return null;
             }
 
-*/
             ops.exportImageMaskPair(selected_images, crop_selection, fg_selection);
             // Check if there is enough tiffs and abort if not?
             List<File> availableTifFiles = ops.getTifFilesInFolder(ops.getImages_dir());
             if (availableTifFiles.size() < 3) {
                 this.error = 2;
                 updateMessage("Error: Not enough training images!\nYou need at least 3 training images.\nBut only " + availableTifFiles.size() + " are present.\nCancel and try again.");
-                TimeUnit.MINUTES.sleep(1);
+                try {
+                    TimeUnit.MINUTES.sleep(1);
+                } catch (InterruptedException e) {
+                    this.error = 2;
+                }
                 return null;
             }
 
@@ -500,10 +523,9 @@ public class EV2UNetTrainCommand implements Runnable {
             updateProgress(count, 2);
             count++;
             updateMessage("Training...");
-            TimeUnit.SECONDS.sleep(5);
             // Create Venv runner
             VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
-                    setup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName()
+                    setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
             );
             // Create cli command
             List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
@@ -522,9 +544,14 @@ public class EV2UNetTrainCommand implements Runnable {
             venv.setArguments(args);
 
             // run the command
-            venv.runCommand();
+            try {
+                venv.runCommand();
+            } catch (IOException e) {
+                this.error = 5;
+                logger.error("Exception while running the CLI command:" + e.getMessage());
+            }
 
-            // Try to get the cli log...
+            // Get the cli log...
             Process process = venv.getProcess();
 
             List<String> logResults = new ArrayList<>();
@@ -532,10 +559,13 @@ public class EV2UNetTrainCommand implements Runnable {
                 @Override
                 public void run() {
                     BufferedReader stdIn = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                    String message = "Training... \n";
+                    if (Platform.getCurrent() == Platform.OSX) message = "Training... May not work on MacOS" + "\n";
                     try {
                         for (String line = stdIn.readLine(); line != null; ) {
                             logResults.add(line);
-                            updateMessage("Training....\n" +line);
+                            if (line.startsWith("Epoch")) message = "Training... " + line + "\n";
+                            updateMessage(message + line);
                             line = stdIn.readLine();
                         }
                     } catch (IOException e) {
@@ -555,6 +585,9 @@ public class EV2UNetTrainCommand implements Runnable {
                 return null;
             }
 
+            updateProgress(count, 2);
+            count++;
+            updateMessage("Done!");
 
             long endTime = System.currentTimeMillis();
             logger.info("Training took " + (endTime - startTime) / 1000 + " seconds.");

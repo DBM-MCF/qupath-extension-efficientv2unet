@@ -1,14 +1,11 @@
 plugins {
     id 'java-library'
     id 'maven-publish'
-
     alias(libs.plugins.javafx)
-    // To create a shadow/fat jar, including dependencies
-    id 'com.github.johnrengelman.shadow' version '7.0.0'
 }
 
 repositories {
-    // Use this only for local development!
+    // Use this only for local development! TODO comment this
     mavenLocal()
 
     mavenCentral()
@@ -26,26 +23,24 @@ repositories {
 ext.moduleName = 'qupath.extension.efficientv2unet'
 ext.qupathVersion = gradle.ext.qupathVersion
 
-description = 'my extension test' // TODO
-
-version = "0.0.1"
+base {
+    description = 'Efficient V2 UNet Extension' // TODO
+    version = "0.5.0"       // I'm matching it to the qupath version, can be major.minor.patch-suffix
+    //group = 'io.github.qupath'
+}
 
 dependencies {
-
-    shadow "io.github.qupath:qupath-gui-fx:${qupathVersion}"
-    shadow libs.qupath.fxtras
+    implementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
+    implementation libs.qupath.fxtras
     implementation libs.bundles.logging
-    implementation "io.github.qupath:qupath-extension-cellpose:0.9.2" // this works now (after it has been uploaded to maven)
+    testImplementation libs.junit
+    testRuntimeOnly libs.junit.platform
 
-
-
-    //implementation "io.github.qupath:qupath-extension-warpy:0.3.0-SNAPSHOT" // Fixme, but this works
-    // below are dependencies of the "old project - v0.3.2"
-    //shadow "org.slf4j:slf4j-api:1.7.30"
-    //testImplementation "io.github.qupath:qupath-gui-fx:${qupathVersion}"
-    //testImplementation "org.junit.jupiter:junit-jupiter-api:5.7.2"
-    //testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine'
-    
+    // Cellpose dependency  ---------
+    // Online dependency
+    //implementation "io.github.qupath:qupath-extension-cellpose:0.9.2" // for building, rely on this version of the cellpose package
+    // FIXME add dependency on local version of cellpose (which is 0.9.2)
+    implementation project(':qupath-extension-cellpose')
 }
 
 processResources {
@@ -74,14 +69,17 @@ java {
     if (project.properties['javadocs'])
 	    withJavadocJar()
 }
-
-/**
- * FIXME: oli has more entries:
- * - jar; (Manifest info) see https://github.com/BIOP/qupath-extension-cellpose/blob/8f805d3b2fe0a7ed811cc1dcc065e549b005647a/build.gradle#L69
- * - javadoc; see https://github.com/BIOP/qupath-extension-cellpose/blob/8f805d3b2fe0a7ed811cc1dcc065e549b005647a/build.gradle#L88
- * - publishing; see https://github.com/BIOP/qupath-extension-cellpose/blob/8f805d3b2fe0a7ed811cc1dcc065e549b005647a/build.gradle#L105
+/*
+ * Manifest info
  */
-
+jar {
+    manifest {
+        attributes("Implementation-Title": project.name,
+                "Implementation-Version": archiveVersion,
+                "Automatic-Module-Name": "io.github." + moduleName
+        )
+    }
+}
 
 
 /*
@@ -94,7 +92,13 @@ if (!strictJavadoc) {
         options.addStringOption('Xdoclint:none', '-quiet')
     }
 }
-    
+
+// This is the same as in the cellpose extension (not in the stardist extension)
+javadoc {
+    options.addBooleanOption('html5', true)
+    destinationDir = new File(project.rootDir, "docs")
+}
+
 /*
  * Avoid 'Entry .gitkeep is a duplicate but no duplicate handling strategy has been set.'
  * when using withSourcesJar()
@@ -105,4 +109,36 @@ tasks.withType(org.gradle.jvm.tasks.Jar) {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+publishing {
+    repositories {
+        maven {
+            name = "SciJava"
+            def releasesRepoUrl = uri("https://maven.scijava.org/content/repositories/releases")
+            def snapshotsRepoUrl = uri("https://maven.scijava.org/content/repositories/snapshots")
+            // Use gradle -Prelease publish
+            url = project.hasProperty('release') ? releasesRepoUrl : snapshotsRepoUrl
+            credentials {
+                username = System.getenv("MAVEN_USER")
+                password = System.getenv("MAVEN_PASS")
+            }
+        }
+    }
+
+    publications {
+        mavenJava(MavenPublication) {
+            groupId = 'io.github.qupath'
+            from components.java
+
+            pom {
+                licenses {
+                    license {
+                        name = 'Apache License v2.0'
+                        url = 'http://www.apache.org/licenses/LICENSE-2.0'
+                    }
+                }
+            }
+        }
+    }
 }

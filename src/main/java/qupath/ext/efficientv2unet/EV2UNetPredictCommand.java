@@ -15,6 +15,7 @@ import org.controlsfx.control.ListSelectionView;
 import org.controlsfx.dialog.ProgressDialog;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
 import qupath.fx.dialogs.Dialogs;
 import qupath.fx.dialogs.FileChoosers;
 import qupath.fx.utils.FXUtils;
@@ -26,9 +27,7 @@ import qupath.lib.projects.Project;
 import qupath.lib.projects.ProjectImageEntry;
 
 import java.awt.image.BufferedImage;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
+import java.io.*;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.stream.Collectors;
@@ -256,6 +255,8 @@ public class EV2UNetPredictCommand implements Runnable{
      * @param thresh: Double threshold for prediction
      * @param res: Integer resolution to perform the prediction on, e.g. 1, 2, 3...
      * @param images: List of ProjectImageEntry that need to be predicted
+     *
+     * @Deprecated
      */
     public void predictImages(
             String model_path,
@@ -269,33 +270,28 @@ public class EV2UNetPredictCommand implements Runnable{
         // create OPs object
         OpInEx opInEx = new OpInEx(qupath);
 
-        // Predict using the builder
-        var builder = EfficientV2UNet
-                .builder()
-                .doPredict(true)
-                .setModelPath(model_path)
-                .setTempDir(opInEx.getTemp_dir())
-                .setPredictOutputDirectory(opInEx.getPrediction_dir())
-                .setResolution(res)
-                .setThreshold(thresh)
-                .setUseLessMemory(true)
-                .setAnnotationClassName(annotationClassName)
-                .doSplitObject(splitObject)
-                .doRemoveExistingAnnotations(removeExistingAnnotations)
-                .build();
+        // Create a task
+        PredictTask worker = new PredictTask(images, opInEx.getTemp_dir(),  model_path, opInEx.getPrediction_dir(), res, thresh, annotationClassName, splitObject, removeExistingAnnotations, opInEx);
 
-        // Create task for predicting (with custom class below)
-        PredictTask worker = new PredictTask(builder, images, annotationClassName, splitObject, removeExistingAnnotations, opInEx);
-
+        // Create a progress dialog
         ProgressDialog progress = new ProgressDialog(worker);
-        progress.setWidth(600);
         progress.initOwner(qupath.getStage());
         progress.setTitle("Predicting...");
         progress.getDialogPane().setHeaderText("Predicting...");
         progress.getDialogPane().setGraphic(null);
         progress.getDialogPane().getButtonTypes().add(ButtonType.CANCEL);
+        progress.setWidth(700); // this does not work...
+        progress.setHeight(300);
+        progress.setResizable(true);
+
+        // Actions on cancel
         progress.getDialogPane().lookupButton(ButtonType.CANCEL).addEventFilter(ActionEvent.ACTION, e -> {
-            if (Dialogs.showYesNoDialog("Cancel prediction?", "Are you sure you want to cancel the prediction?\nBecause it probably won't work...")) {
+            if (worker.error > 1) {
+                progress.setHeaderText("Cancelling...");
+                progress.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(true);
+                worker.cancel(true);
+            }
+            else if (Dialogs.showYesNoDialog("Cancel prediction?", "Are you sure you want to cancel the prediction?\nSome steps may still run in the background...")) {
                 progress.setHeaderText("Cancelling...");
                 progress.getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(true);
                 worker.cancel(true);
@@ -303,9 +299,20 @@ public class EV2UNetPredictCommand implements Runnable{
             e.consume();
         });
 
-        // create & run task
+        // Create & run task
         runningTask.set(qupath.getThreadPoolManager().getSingleThreadExecutor(this).submit(worker));
-        progress.show();
+
+        progress.showAndWait();
+        // Throw errors
+        if (worker.error != 1) {
+            if (worker.error == 2) {
+                throw new RuntimeException("Could not build virtual environment");
+            }
+            else if (worker.error == 3) {
+                throw new RuntimeException("Exception while running the virtual environment CLI command");
+            }
+        }
+        else logger.info("Finished predicting!");
     }
 
 
@@ -396,80 +403,175 @@ public class EV2UNetPredictCommand implements Runnable{
         return resultArray;
     }
 
-    /**
-     * Task class for predicting images.
-     *
-     */
-   class PredictTask extends Task<Void> {
-        private EfficientV2UNet builder;
+    class PredictTask extends Task<Void> {
         private List<ProjectImageEntry<BufferedImage>> imagesToPredict;
         private String annotationClassName;
         private boolean splitAnnotations;
         private boolean removeExistingAnnotations;
         private OpInEx ops;
-        private boolean quietCancel = false;
+        private String dir;
+        private String model_path;
+        private String out_dir;
+        private Integer resolution;
+        private Double threshold;
+        private Integer error = 1;  // 0 = cancelled, 1 = all fine
+                                    // 2 = CLI exe error, 3 = Venv error,
+        private Integer cur_image_count = 1;
+        private Integer count = 0;
 
-        /**
-         * Constructor
-         * @param builder: EfficientV2UNet builder
-         * @param imagesToPredict: List of ProjectImageEntry of images to predict
-         * @param annotationClassName: String for the annotation class
-         * @param splitAnnotations: boolean specifying whether to split the new objects
-         * @param removeExistingAnnotations: boolean specifying whether to remove existing annotations
-         * @param ops: OpInEx object
-         */
-        public PredictTask(EfficientV2UNet builder, List<ProjectImageEntry<BufferedImage>> imagesToPredict,
-                           String annotationClassName, boolean splitAnnotations, boolean removeExistingAnnotations, OpInEx ops) {
-            this.builder = builder;
+
+
+
+        public PredictTask(
+                List<ProjectImageEntry<BufferedImage>> imagesToPredict,
+                String dir,
+                String model_path,
+                String out_dir,
+                Integer resolution,
+                Double threshold,
+                String annotationClassName,
+                boolean splitAnnotations,
+                boolean removeExistingAnnotations,
+                OpInEx ops) {
             this.imagesToPredict = imagesToPredict;
+            this.dir = dir;
+            this.model_path = model_path;
+            this.out_dir = out_dir;
+            this.resolution = resolution;
+            this.threshold = threshold;
             this.annotationClassName = annotationClassName;
             this.splitAnnotations = splitAnnotations;
             this.removeExistingAnnotations = removeExistingAnnotations;
             this.ops = ops;
         }
 
-       /**
-        * Called when task is started
-        * @return null
-        */
         @Override
-       protected Void call() {
+        public boolean cancel(boolean b) {
+            this.error = 0;
+            return super.cancel(b);
+        }
+
+        @Override
+        protected Void call() {
             long startTime = System.currentTimeMillis();
-            int count = 0;
-            // Export the images that need to be predicted
-            updateProgress(count, 4);
+            int final_count = 4 + imagesToPredict.size();
+            // Export the images that need to be predicted  -------------------
+            updateProgress(count, final_count);
             count++;
             updateMessage("Exporting images...");
             ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict);
             logger.info("Exported temp images.");
 
-            // start the prediction
-            updateProgress(count, 4);
+            // Start the prediction
+            updateProgress(count, final_count);
             count++;
             updateMessage("Predicting images...");
-            builder.doPredict();
-            logger.info("Predicted images.");
+            logger.info("Predicting images...");
 
-            // load the masks
-            updateProgress(count, 4);
+            // Build the environment runner                 -------------------
+            VirtualEnvironmentRunner venv = buildPredictVenvRunner();
+            if (venv == null) {
+                this.error = 2;
+                updateMessage("Failed to build VENV");
+                return null;
+            }
+            // Run the CLI
+            try {
+                venv.runCommand();
+            } catch (IOException e) {
+                logger.error("Error occurred when running the VENV: " + e.getLocalizedMessage());
+                this.error = 3;
+                return null;
+            }
+            // Get process to show the progress in the process-dialog
+            Process process = venv.getProcess();
+            List<String> logResults = new ArrayList<>();
+
+            updateProgress(count, final_count);
             count++;
-            updateMessage("Loading predictions.");
+
+            Thread t = new Thread(Thread.currentThread().getName() + "-" + process.hashCode()) {
+                @Override
+                public void run() {
+                    BufferedReader stdIn = new BufferedReader(new InputStreamReader(process.getInputStream()));
+                    try {
+                        for (String line = stdIn.readLine(); line != null; ) {
+                            logResults.add(line);
+                            if (line.startsWith("Tiling") && cur_image_count != imagesToPredict.size()) {
+                                cur_image_count++;
+                                updateProgress(count, final_count);
+                                count++;
+                            }
+                            updateMessage("Predicting....\nPredicting image " + cur_image_count + "/" + imagesToPredict.size()+ "\n" + line);
+                            line = stdIn.readLine();
+                        }
+                    } catch (IOException e) {
+                        error = 3;
+                        logger.warn(e.getMessage());
+                    }
+                }
+            };
+            t.setDaemon(true);
+            t.start();
+
+            // wait for the process to finish
+            try {
+                process.waitFor();
+            } catch (InterruptedException e) {
+                logger.error("CLI execution/interruption error: " + e);
+                this.error = 5;
+                return null;
+            }
+
+            // Load the masks
+            updateProgress(count, final_count);
+            count++;
+            updateMessage("Loading predictions...");
             Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotatin class name
             ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map);
-            logger.info("Loaded predictions.");
-            // delete the temp files
-            updateProgress(count, 4);
+
+            // Delete the temp files
+            updateProgress(count, final_count);
             count++;
-            updateMessage("Deleting temp files...");
+            updateMessage("Deleting temporary files...");
             ops.deleteTempFiles();
             ops.deletePredictionFiles(ops.getPredictionFiles());
-            logger.info("Deleted temp files.");
 
             long endTime = System.currentTimeMillis();
-            logger.info("Predict took " + (endTime - startTime) / 1000 + " seconds.");
+            logger.info("Prediction took " + (endTime - startTime) / 1000 + " seconds.");
+
             return null;
         }
 
-   }
+        /**
+         * Function to create the VENV for predicting
+         * @return VirtualEnvironmentRunner with commands set for prediction
+         */
+        private VirtualEnvironmentRunner buildPredictVenvRunner() {
+            EV2UnetSetup setup = EV2UnetSetup.getInstance();
+            if (setup.getEv2unetPythonPath().isEmpty()) {
+                return null;
+            }
+            VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
+                    setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
+            );
+            // Build the cli arguments
+            List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore","-m", "efficient_v2_unet", "--predict"));
+            args.add("--dir");
+            args.add(dir);
+            args.add("--model");
+            args.add(model_path);
+            args.add("--resolution");
+            args.add(resolution.toString());
+            args.add("--threshold");
+            args.add(threshold.toString());
+            args.add("--savedir");
+            args.add(out_dir);
+            args.add("--use_less_memory");
+
+            venv.setArguments(args);
+            return venv;
+        }
+    }
 
 } // end (main) class

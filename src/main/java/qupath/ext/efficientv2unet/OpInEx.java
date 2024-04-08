@@ -408,7 +408,13 @@ public class OpInEx {
         // loop over the ProjectImageEntries
         imageList.forEach(image -> {
             // get the image name (without extension), and read the image data
-            String image_name = GeneralTools.stripExtension(image.getImageName());
+            String image_name = image.getImageName();
+            // if the image_name also contains a path, remove it (else Windows will not write the file)
+            if ((image_name.contains(File.separator) || image_name.contains("\\")) && image_name.contains(" - ")) {
+                image_name = image_name.split(" - ")[0];
+                logger.trace("********* Removed path from image name: " + image_name);
+            }
+            image_name = GeneralTools.stripExtension(image_name);
             ImageData<BufferedImage> image_data;
             try {
                 image_data = image.readImageData();
@@ -458,21 +464,24 @@ public class OpInEx {
 
             // Save image and mask for each requestROI
             AtomicInteger count = new AtomicInteger(1);
+            String name = image_name;
             requestROIs.forEach(roi -> {
                 // Create a RegionRequest without downsampling
                 RegionRequest request = RegionRequest.createInstance(image_data.getServer().getPath(), 1, roi);
 
                 // write images to file
-                File image_file = new File(images_dir, image_name + "_" + count.get() + ".tif");
-                File mask_file = new File(masks_dir, image_name + "_" + count.get() + ".tif");
+                File image_file = new File(images_dir, name + "_" + count.get() + ".tif");
+                File mask_file = new File(masks_dir, name + "_" + count.get() + ".tif");
 
                 try {
                     ImageWriterTools.writeImageRegion(image_data.getServer(), request, image_file.getAbsolutePath());
-                    logger.info("Image has been written to: " + image_file.getAbsolutePath());
+                    if (image_file.exists()) logger.info("Image has been written to: " + image_file.getAbsolutePath());
+                    else logger.error("Image was NOT written to: " + image_file.getAbsolutePath());
                     ImageWriterTools.writeImageRegion(mask, request, mask_file.getAbsolutePath());
-                    logger.info("Mask has been written to: " + mask_file.getAbsolutePath());
+                    if (mask_file.exists()) logger.info("Mask has been written to: " + mask_file.getAbsolutePath());
+                    else logger.error("Mask was NOT written to: " + mask_file.getAbsolutePath());
                 } catch (Exception ex) {
-                    logger.error("Error in writing images to file: {} ({})", image_name, ex.getLocalizedMessage());
+                    logger.error("Error in writing images to file: {} ({})", name, ex.getLocalizedMessage());
                 }
                 count.getAndIncrement();
             });

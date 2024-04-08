@@ -304,9 +304,6 @@ public class EfficientV2UNet {
             }
             // Training             --------------------------------------------
             else if (train) {
-                logger.error("Training not yet implemented"); // FIXME
-                // TODO check training parameters. Should I already check if the folders exist?
-
                 // Check if the train image dir exists
                 if (train_image_dir == null || !new File(train_image_dir).exists()) {
                     throw new IllegalArgumentException("Training image directory does not exist: " + train_image_dir);
@@ -542,7 +539,7 @@ public class EfficientV2UNet {
      */
     public void doPredict(){
         VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
-                setup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName()
+                setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
         );
         // build the cli arguments
         List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--predict"));
@@ -581,7 +578,7 @@ public class EfficientV2UNet {
      */
     public void doTrain() {
         VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
-                setup.getEv2unetPythonPath(), VirtualEnvironmentRunner.EnvType.EXE, this.getClass().getSimpleName()
+                setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
         );
         // build the cli arguments
         List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
