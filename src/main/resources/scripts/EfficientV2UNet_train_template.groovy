@@ -16,17 +16,15 @@ import qupath.ext.efficientv2unet.EfficientV2UNet
  */
 
 def efficientV2Unet = EfficientV2UNet.builder()
-// Modality settings
+        // Modality settings
         .doTrain(true)                                         // either doTrain or doPredict must be true
-//        .doPredict(false)                                // either doTrain or doPredict must be true
-// Train settings
+        // Train settings
         .setTrainImageDirectory("/path/to/image/dir")           // Directory where the images are located (must be existing folder with tif files)
         .setTrainMaskDirectory("path/to/mask/dir")              // Directory where the masks are located (must be existing folder with tif files)
 //        .setBaseDirectory("path/to/model/saving/dir")           // Saving path of the model: defaults to "../YourQuPathProjectFolder/models"
         .setBasemodel("b0")                                     // Basemodel to use. Defaults to "b0". Others: b1, b2, b3, s, m, l
         .setName("myEfficientV2UNet_model")                     // Name for the model. Defaults to "myEfficientV2UNet_*basemodel*"
         .setEpochs(100)                                         // Number of epochs. Defaults to 100
-
         .build()
 
 // start the training

@@ -1,144 +1,98 @@
+# QuPath Efficient V2 UNet extension
 
-# THIS IS OLD - need to adjust, but later...
+Welcome to the Efficient V2 UNet extension for [QuPath](http://qupath.github.io)!
 
-# QuPath StarDist extension
+This adds support for running the Efficient V2 UNet implementation of [EfficientNetV2](https://arxiv.org/abs/2104.00298), to train model and segment histology images.
 
-Welcome to the StarDist extension for [QuPath](http://qupath.github.io)!
+The current version is written for QuPath v0.5.0, and requires also the [qupath-cellpose-extension](https://github.com/BIOP/qupath-extension-cellpose) (v.0.9.2).
 
-This adds support for running the 2D version of StarDist nucleus detection developed by Uwe Schmidt and Martin Weigert.
+# Citing
 
-It is intended for the (at the time of writing) not-yet-released QuPath v0.3, and remains in a not-quite-complete state.
+If you are using this extension please cite following publications and repositories:
 
-> **Note:** The implementation has changed from QuPath v0.2, and the results may not be identical.
-> One new feature is that nucleus classifications - see [the documentation](https://qupath.readthedocs.io/en/stable/docs/advanced/stardist.html) for more details.
+Mingxing T., Quoc V. Le **EfficientNetV2: Smaller Models and Faster Training**. arXiv (2021). https://doi.org/10.48550/arXiv.2104.00298
 
-## Installing
+Bankhead, P. et al. **QuPath: Open source software for digital pathology image analysis**. Scientific Reports (2017). https://doi.org/10.1038/s41598-017-17204-5
 
-To install the StarDist extension, download the latest `qupath-extension-stardist-[version].jar` file from [releases](https://github.com/qupath/qupath-extension-stardist/releases) and drag it onto the main QuPath window.
+The **QuPath cellpose extension** by Burri, O., Chiaruttini, N., and Guiet R. [GitHubRepo](https://github.com/BIOP/qupath-extension-cellpose) and [![DOI](https://zenodo.org/badge/417468733.svg)](https://zenodo.org/doi/10.5281/zenodo.10829243).
 
-If you haven't installed any extensions before, you'll be prompted to select a QuPath user directory.
-The extension will then be copied to a location inside that directory.
+And this extension by linking to this GitHub repository and the [Efficient V2 UNet repository](https://github.com/DBM-MCF/efficientv2-unet).
 
-You might then need to restart QuPath (but not your computer).
+## Code authorship
 
+**Author**: Loïc Sauteur
 
-## Running
+**Affiliation**: Department of Biomedicine, University of Basel
 
-There are different ways to run the StarDist detection in QuPath, using different deep learning libraries.
-Choosing which to use can be a balance between convenience and performance, which might vary according to your hardware.
+# Installation
+### Step 1: Install Efficient V2 UNet
+- Create a python environment for the Efficient V2 UNet as described [here](https://github.com/DBM-MCF/efficientv2-unet).
+### Step 2: Install the extension
+- Download the latest `qupath-extension-efficientv2unet-[version].jar` file from releases, and add it into your extensions directory.
+   - If your extensions directory is unset, drag & drop `qupath-extension-efficientv2unet-[version].jar` onto the main QuPath window. 
+     You'll be prompted to select a QuPath user directory.
+     The extension will then be copied to a location inside that directory.
+- Download the latest `qupath-extension-cellpose-[version].jar` from the respective [repository](https://github.com/BIOP/qupath-extension-cellpose), 
+and add it into your extensions directory.
+ 
+### Set up the extension in QuPath
+- In QuPath go to `Edit > Preferences > EfficientV2UNet`, 
+specify the path to the EfficientV2UNet environment python executable file.
+  - You can find the location of the python executable file by starting a CLI of the EffiecientV2UNet and
+  typing `where python` (Windows) or `which python`(UNIX).
+- Specify also the kind of environment used (see note below)
+- You may also configure the cellpose settings (follow the [instructions](https://github.com/BIOP/qupath-extension-cellpose) accordingly), 
+- but it is not required for this extension
 
-### Using OpenCV DNN
+> [!NOTE]
+> `Python Executable` will work across general platforms. For OSX platforms it will be the default.
+> 
+> On Windows with conda EfficientV2UNet, I suggest using `Anaconda or Miniconda` accordingly, as it will allow you to make use of the GPU.
 
-The easiest (but not necessarily fastest) way to run StarDist is using OpenCV.
+# Usage
+### Training
+You can use annotated data in a QuPath project to train an EfficientV2UNet, 
+using the menu entry: `Extensions > Efficient V2 UNet > Train a UNet`.
 
-To do this, you'll also need to download some pre-trained StarDist model files in *.pb* format.
-You can find some [here](https://github.com/qupath/models/tree/main/stardist).
+Follow the on-screen dialog to set it up.
+Once set up, it will export images and mask, then perform the training.
+- The `Only export image / mask pairs` option will allow you to export the images and corresponding masks, while skipping the training.
+- Setting an Annotation class for `Region for image cropping` will use the corresponding annotations 
+in the images to crop sub-parts of the image. If not specified (or not available in an image) it will use the full image.
+- The `Foreground Annotation class` are the annotations that will be considered as positive pixels. 
+Only images containing such annotations are selectable in the GUI.
+- Select the images you want to use for generating training data and training (opened images should be saved before running the training)
+- Select the base-model for training a new Efficient V2 UNet
+  - options are `B0`, `B1`, `B2`, `B3`, `S` ,`M` and `L`, the first being the smallest and the last being the biggest.
+- Specify the number of epochs you want to train your model for.
+  - A starting point epochs = 50, but more is usually better.
+  - Training a model, will also save the best-checkpoint model (with the best binary IoU metrics)
 
-The StarDist extension is then run from a script, for example
+Similarly, you can use the provided script template in `Extensions > Efficient V2 UNet > Script templates > EV2UNet training script template` with annotation data already organised.
 
-```groovy
-import qupath.ext.stardist.StarDist2D
+> [!NOTE]
+> - For training, at least 3 images are required. The more, the better. Try also including variability between images.
+> - Training images can have arbitrary sizes.
 
-// Specify the model .pb file (you will need to change this!)
-def pathModel = '/path/to/dsb2018_heavy_augment.pb'
+### Predicting
+Using the menu entry: `Extensions > Efficient V2 UNet > Predict images`, you can predict images with a trained Efficient V2 UNet model.
 
-def stardist = StarDist2D.builder(pathModel)
-        .threshold(0.5)              // Probability (detection) threshold
-        .channels('DAPI')            // Select detection channel
-        .normalizePercentiles(1, 99) // Percentile normalization
-        .pixelSize(0.5)              // Resolution for detection
-        .cellExpansion(5.0)          // Approximate cells based upon nucleus expansion
-        .cellConstrainScale(1.5)     // Constrain cell expansion using nucleus size
-        .measureShape()              // Add shape measurements
-        .measureIntensity()          // Add cell measurements (in all compartments)
-        .includeProbability(true)    // Add probability as a measurement (enables later filtering)
-        .build()
+Follow the on-screen dialog:
+- Choose your model `*.h5` file 
+> [!NOTE]
+> It will indicate the best threshold and resolution to use, based on the metrics for test images the training has used. 
+- Predicted annotation objects will be set to the selected class `Assing to class`
+- Using the `Split Annotations` option will create individual objects from the prediction, rather than keeping separate objects as a single annotation.
+- The `Remove existing Objects` **will delete all objects** (Annotations, Detections, Cells) in the image before adding the newly predicted ones.
+- Adjust the `Threshold` according to the model metrics
+- Adjust the `Inference resolution` according to the model metrics (downscaling of the image is performed by the python library not QuPath)
+- Select which images to predict (opened images should be saved before running the prediction)
 
-// Run detection for the selected objects
-def imageData = getCurrentImageData()
-def pathObjects = getSelectedObjects()
-if (pathObjects.isEmpty()) {
-    Dialogs.showErrorMessage("StarDist", "Please select a parent object!")
-    return
-}
-stardist.detectObjects(imageData, pathObjects)
-println 'Done!'
-```
+Similarly, you can use the provided script template in `Extensions > Efficient V2 UNet > Script templates > EV2UNet predict script template` to predict a currently opened project image.
 
-For more examples, including additional instructions to add GPU support, see [ReadTheDocs](https://qupath.readthedocs.io/en/stable/docs/advanced/stardist.html).
+# Building
 
-#### Converting a TensorFlow model for use with OpenCV
-
-If you are training a new StarDist model, you will probably have a TensorFlow *SavedModel* directory.
-You can convert this to a frozen, OpenCV-friendly *.pb* format with the help of [tf2onnx](https://github.com/onnx/tensorflow-onnx).
-
-After installing both *TensorFlow* and *tf2onnx*, use:
-
-```
-python -m tf2onnx.convert --opset 10 --saved-model "/path/to/saved/model/directory" --output_frozen_graph "/path/to/output/model/file.pb"
-```
-
-
-### Using TensorFlow
-
-You can also use StarDist with TensorFlow directly.
-This means that the *SavedModel* does not need to be converted, but setup in QuPath takes more effort.
-
-To try it, in additiont to adding the StarDist extension you will need to build and install the [QuPath Tensorflow extension](https://github.com/qupath/qupath-extension-tensorflow).
-
-Compatible *SavedModels* from StarDist's developers can be found at https://github.com/stardist/stardist-imagej/tree/master/src/main/resources/models/2D
-
-These will need to be unzipped, and the script to run StarDist changed as shown below:
-```groovy
-// Specify the model directory (you will need to change this!)
-def pathModel = '/path/to/saved_model'
-def dnn = qupath.ext.tensorflow.TensorFlowTools.createDnnModel(pathModel)
-
-def stardist = StarDist2D.builder(dnn)
-  ...
-  .build()
-
-...
-```
-
-> TensorFlow Java doesn't currently work with Apple Silicon, however OpenCV does.
-
-
-### Using OpenVINO
-
-You can also use StarDist with OpenVINO.
-
-You will need to install [QuPath OpenVINO extension](https://github.com/dkurt/qupath-extension-openvino) from @dkurt, and follow the instructions in the extension ReadMe to convert the StarDist models.
-
-The script to run StarDist then looks like:
-
-```groovy
-// Specify the model directory (you will need to change this!)
-def pathModel = '/path/to/converted_model.xml'
-var dnn = qupath.ext.openvino.OpenVINOTools.createDnnModel('/path/to/model.xml')
-
-def stardist = StarDist2D.builder(dnn)
-  ...
-  .build()
-
-...
-```
-
-
-## Citing
-
-If you use this extension, you should cite the original StarDist publication
-
-- Uwe Schmidt, Martin Weigert, Coleman Broaddus, and Gene Myers.  
-[*Cell Detection with Star-convex Polygons*](https://arxiv.org/abs/1806.03535).  
-International Conference on Medical Image Computing and Computer-Assisted Intervention (MICCAI), Granada, Spain, September 2018.
-
-You should also cite the QuPath publication, as described [here](https://qupath.readthedocs.io/en/stable/docs/intro/citing.html).
-
-
-## Building
-
-You can build the QuPath StarDist extension from source with
+You can build the QuPath Efficient V2 UNet extension from source with
 
 ```bash
 gradlew clean build

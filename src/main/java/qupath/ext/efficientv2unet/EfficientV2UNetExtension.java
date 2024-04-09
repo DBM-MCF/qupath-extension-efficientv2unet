@@ -74,7 +74,7 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
 
         MenuTools.addMenuItems(
                 qupath.getMenu("Extensions>Efficient V2 UNet", true),
-                new Action("Train a Efficient V2 UNet", e -> new EV2UNetTrainCommand(qupath).run())
+                new Action("Train a UNet", e -> new EV2UNetTrainCommand(qupath).run())
         );
 
         // Create preference entry for the python environment   ---------------
@@ -99,7 +99,7 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
                     "E.g.: <C:\\Users\\YourName\\.conda\\envs\\EnvName\\python.exe>";
         }
         else {
-            name = "EfficientV2UNet environment python folder location";
+            name = "EfficientV2UNet environment python file location";
             description = "The full path to your EfficientV2UNet environment python file.\n" +
                     "E.g.: </Users/YourName/opt/anaconda3/envs/EnvName/bin/python>";
         }

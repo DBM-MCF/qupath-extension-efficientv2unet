@@ -17,7 +17,6 @@ import qupath.ext.efficientv2unet.EfficientV2UNet
 def model_path = "/path/to/your/model/model_file.h5"
 def efficientV2Unet = EfficientV2UNet.builder()
         // Modality settings
-//      .doTrain(false)                                         // either doTrain or doPredict must be true
         .doPredict(true)                                // either doTrain or doPredict must be true
 
         // Predict settings
