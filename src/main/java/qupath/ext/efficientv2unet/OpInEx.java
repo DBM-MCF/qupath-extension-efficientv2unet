@@ -265,6 +265,9 @@ public class OpInEx {
      */
     public void batch_load_maskFiles(List<File> file_list, List<ProjectImageEntry<BufferedImage>> image_entries,
                                      boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        if (file_list == null || file_list.isEmpty()) {
+            logger.error("No mask files to load");
+        }
         for (File f : file_list) {
             List<ProjectImageEntry<BufferedImage>> found_entry = image_entries.stream().filter(ie -> ie.getImageName().contains(GeneralTools.stripExtension(f.getName()))).collect(Collectors.toList());
             if (found_entry.isEmpty()) {

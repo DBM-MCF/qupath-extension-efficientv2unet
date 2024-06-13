@@ -90,6 +90,12 @@ Follow the on-screen dialog:
 
 Similarly, you can use the provided script template in `Extensions > Efficient V2 UNet > Script templates > EV2UNet predict script template` to predict a currently opened project image.
 
+### Additional utility
+The menu entry: `Extensions > Efficient V2 UNet > Load a mask image` allows you to import a binary segmentation to one of your project images.
+
+It requires both images to be the same size, and the mask image to be binary (0 = background, 1 = foreground).
+
+
 # Building
 
 You can build the QuPath Efficient V2 UNet extension from source with

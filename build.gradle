@@ -38,9 +38,9 @@ dependencies {
 
     // Cellpose dependency  ---------
     // Online dependency
-    //implementation "io.github.qupath:qupath-extension-cellpose:0.9.2" // for building, rely on this version of the cellpose package
+    implementation "io.github.qupath:qupath-extension-cellpose:0.9.3" // for building, rely on this version of the cellpose package
     // FIXME add dependency on local version of cellpose (which is 0.9.2)
-    implementation project(':qupath-extension-cellpose')
+    //implementation project(':qupath-extension-cellpose')
 }
 
 processResources {

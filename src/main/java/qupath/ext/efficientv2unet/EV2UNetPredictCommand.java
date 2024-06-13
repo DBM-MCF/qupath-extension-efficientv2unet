@@ -522,13 +522,15 @@ public class EV2UNetPredictCommand implements Runnable{
                 this.error = 5;
                 return null;
             }
+            logger.info("Prediction finished");
 
             // Load the masks
             updateProgress(count, final_count);
             count++;
             updateMessage("Loading predictions...");
-            Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotatin class name
+            Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotation class name
             ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map);
+            logger.info("Predictions loaded.");
 
             // Delete the temp files
             updateProgress(count, final_count);
@@ -536,6 +538,7 @@ public class EV2UNetPredictCommand implements Runnable{
             updateMessage("Deleting temporary files...");
             ops.deleteTempFiles();
             ops.deletePredictionFiles(ops.getPredictionFiles());
+            logger.info("Deleted temporary files.");
 
             long endTime = System.currentTimeMillis();
             logger.info("Prediction took " + (endTime - startTime) / 1000 + " seconds.");
