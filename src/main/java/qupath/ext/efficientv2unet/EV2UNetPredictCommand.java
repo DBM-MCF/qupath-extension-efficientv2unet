@@ -477,7 +477,7 @@ public class EV2UNetPredictCommand implements Runnable{
             }
             // Run the CLI
             try {
-                venv.runCommand();
+                venv.runCommand(false);
             } catch (IOException e) {
                 logger.error("Error occurred when running the VENV: " + e.getLocalizedMessage());
                 this.error = 3;

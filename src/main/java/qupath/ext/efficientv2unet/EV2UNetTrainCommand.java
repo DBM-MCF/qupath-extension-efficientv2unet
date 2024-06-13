@@ -545,7 +545,7 @@ public class EV2UNetTrainCommand implements Runnable {
 
             // run the command
             try {
-                venv.runCommand();
+                venv.runCommand(false);
             } catch (IOException e) {
                 this.error = 5;
                 logger.error("Exception while running the CLI command:" + e.getMessage());

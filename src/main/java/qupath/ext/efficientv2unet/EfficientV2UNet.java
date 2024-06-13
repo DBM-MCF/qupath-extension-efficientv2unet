@@ -558,7 +558,7 @@ public class EfficientV2UNet {
         // run the command
         venv.setArguments(args);
         try {
-            venv.runCommand();
+            venv.runCommand(false);
         } catch (IOException e) {
             logger.error("Exception while running the CLI command: " + e.getLocalizedMessage());
         }
@@ -598,7 +598,7 @@ public class EfficientV2UNet {
         // run the command
         venv.setArguments(args);
         try {
-            venv.runCommand();
+            venv.runCommand(false);
         } catch (IOException e) {
             logger.error("Exception while running the CLI command: " + e.getLocalizedMessage());
         }

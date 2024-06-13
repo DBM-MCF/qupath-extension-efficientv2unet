@@ -319,6 +319,7 @@ public class OpInEx {
         } catch (IOException e) {
             throw new RuntimeException("Could not read imageData from QuPath image: " + imageEntry.getImageName() + " -> " + e);
         }
+        mask.close();
         // sanity test
         if (imageData == null) {
             throw new RuntimeException("Image data is null but shouldn't be for image: " + imageEntry.getImageName());
