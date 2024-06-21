@@ -4,7 +4,7 @@ Welcome to the Efficient V2 UNet extension for [QuPath](http://qupath.github.io)
 
 This adds support for running the Efficient V2 UNet implementation of [EfficientNetV2](https://arxiv.org/abs/2104.00298), to train model and segment histology images.
 
-The current version is written for QuPath v0.5.0, and requires also the [qupath-cellpose-extension](https://github.com/BIOP/qupath-extension-cellpose) (v.0.9.2).
+The current version is written for QuPath v0.5.0, and requires also the [qupath-cellpose-extension](https://github.com/BIOP/qupath-extension-cellpose) (v.0.9.3).
 
 # Citing
 
@@ -28,18 +28,18 @@ And this extension by linking to this GitHub repository and the [Efficient V2 UN
 ### Step 1: Install Efficient V2 UNet
 - Create a python environment for the Efficient V2 UNet as described [here](https://github.com/DBM-MCF/efficientv2-unet).
 ### Step 2: Install the extension
-- Download the latest `qupath-extension-efficientv2unet-[version].jar` file from releases, and add it into your extensions directory.
+- Download the latest `qupath-extension-efficientv2unet-[version].jar` file from releases, and add it into your extensions' directory.
    - If your extensions directory is unset, drag & drop `qupath-extension-efficientv2unet-[version].jar` onto the main QuPath window. 
      You'll be prompted to select a QuPath user directory.
      The extension will then be copied to a location inside that directory.
 - Download the latest `qupath-extension-cellpose-[version].jar` from the respective [repository](https://github.com/BIOP/qupath-extension-cellpose), 
-and add it into your extensions directory.
+and add it into your extensions' directory.
  
 ### Set up the extension in QuPath
 - In QuPath go to `Edit > Preferences > EfficientV2UNet`, 
 specify the path to the EfficientV2UNet environment python executable file.
   - You can find the location of the python executable file by starting a CLI of the EffiecientV2UNet and
-  typing `where python` (Windows) or `which python`(UNIX).
+  typing `where python` (Windows) or `which python` (UNIX).
 - Specify also the kind of environment used (see note below)
 - You may also configure the cellpose settings (follow the [instructions](https://github.com/BIOP/qupath-extension-cellpose) accordingly), 
 - but it is not required for this extension
@@ -47,7 +47,7 @@ specify the path to the EfficientV2UNet environment python executable file.
 > [!NOTE]
 > `Python Executable` will work across general platforms. For OSX platforms it will be the default.
 > 
-> On Windows with conda EfficientV2UNet, I suggest using `Anaconda or Miniconda` accordingly, as it will allow you to make use of the GPU.
+> On Windows with a conda EfficientV2UNet, I suggest using `Anaconda or Miniconda` accordingly, as it will allow you to make use of the GPU.
 
 # Usage
 ### Training

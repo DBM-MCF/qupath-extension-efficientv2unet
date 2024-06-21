@@ -9,6 +9,7 @@ public class EV2UnetSetup {
     private static final EV2UnetSetup instance = new EV2UnetSetup();
     private String ev2UnetPythonPath = null;
     private VirtualEnvironmentRunner.EnvType envtype;
+    private String condaPath = null;
 
     public static EV2UnetSetup getInstance() {
         return instance;
@@ -33,5 +34,9 @@ public class EV2UnetSetup {
     public String getEv2unetPythonPath() {
         return ev2UnetPythonPath;
     }
+
+    public void setCondaPath(String condaPath) { this.condaPath = condaPath; }
+
+    public String getCondaPath() { return condaPath; }
 
 }

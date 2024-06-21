@@ -556,6 +556,8 @@ public class EV2UNetPredictCommand implements Runnable{
                 return null;
             }
             VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
+                    // FIXME adjust for oli's "conda-returns" branch - probably not necessary
+                    //setup.getEv2unetPythonPath(), setup.getEnvtype(), setup.getCondaPath(), this.getClass().getSimpleName()
                     setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
             );
             // Build the cli arguments

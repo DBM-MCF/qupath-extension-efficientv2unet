@@ -28,7 +28,7 @@ import java.util.LinkedHashMap;
  * Install EfficientV2UNet as an extension.
  * <p>
  *
- * @author Loïc Sauteur
+ * @author Loïc Sauteur - DBM University of Basel
  */
 public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject {
 
@@ -42,7 +42,7 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
 
     @Override
     public void installExtension(QuPathGUI qupath) {
-        // The Efficient V2 UNet extension requires the cellpose extension >= 0.9.2
+        // The Efficient V2 UNet extension requires the cellpose extension >= 0.9.3
         String cellpose_version_str = GeneralTools.getPackageVersion(CellposeExtension.class);
 
         // I cannot check if cellpose is installed at all, since I need to load it here. Hence, QuPath Extension manager will throw an error
@@ -54,9 +54,9 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
             return;
         }
         Version cellpose_version = Version.parse(cellpose_version_str);
-        if ((cellpose_version.getMajor() == 0 && cellpose_version.getMinor() < 9) || (cellpose_version.getMinor() == 9 && cellpose_version.getPatch() < 2)) {
+        if ((cellpose_version.getMajor() == 0 && cellpose_version.getMinor() < 9) || (cellpose_version.getMinor() == 9 && cellpose_version.getPatch() < 3)) {
             Dialogs.showErrorMessage(getName(),
-                    "The Efficient V2 UNet extension requires cellpose extension 0.9.2 or higher. You have version " + cellpose_version  +
+                    "The Efficient V2 UNet extension requires cellpose extension 0.9.3 or higher. You have version " + cellpose_version  +
                             ".\n\nPlease make sure that both extension jars are copied to the QuPath extension folder.");
             return;
         }
@@ -84,10 +84,14 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
         // Create the option properties
         StringProperty ev2unetPythonPath = PathPrefs.createPersistentPreference("Path to EfficientV2UNet Python", "");
         ObjectProperty<VirtualEnvironmentRunner.EnvType> envType = PathPrefs.createPersistentPreference("Env type", VirtualEnvironmentRunner.EnvType.EXE, VirtualEnvironmentRunner.EnvType.class);
+        // TODO for cellpose-extension: conda-return branch
+        //StringProperty condaPath = PathPrefs.createPersistentPreference("condaPath", "");
 
         // Set the class options to the current QuPath values
         options.setEv2unetPythonPath(ev2unetPythonPath.get());
         options.setEnvtype(envType.get());
+        // TODO for cellpose-extension: conda-return branch
+        //options.setCondaPath(condaPath.get());
 
         // Ensure Platform (WIN/UNIX) dependent preference description
         PropertyItemBuilder.PropertyType propType = PropertyItemBuilder.PropertyType.FILE;
@@ -119,10 +123,21 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
                 .choices(Arrays.asList(VirtualEnvironmentRunner.EnvType.values()))
                 .build();
 
+        // TODO for cellpose-extension: conda-return branch
+        /*
+        PropertySheet.Item condaPathItem = new PropertyItemBuilder<>(condaPath, String.class)
+                .propertyType(PropertyItemBuilder.PropertyType.GENERAL)
+                .name("'Conda' script location (optional)")
+                .category("EfficientV2UNet")
+                .description("The full path to you conda/mamba command, in case you want the extension to use the 'conda activate' command.\ne.g 'C:\\ProgramData\\Miniconda3\\condabin\\mamba.bat'")
+                .build();
+         */
+
         // Listen for changes in QuPath settings
         ev2unetPythonPath.addListener((v, o, n) -> options.setEv2unetPythonPath(n));
         envType.addListener((v, o, n) -> {
             // As 'activate conda' does not work on OSX, we use Python Executable instead, which works just fine also with CONDA envs
+            // TODO check if Oli's fix allows this to work on Mac
             if (n.equals(VirtualEnvironmentRunner.EnvType.CONDA) && Platform.getCurrent() == Platform.OSX) {
                 logger.warn("CONDA does not work properly on OSX. Using Python Executable instead.");
                 Dialogs.showWarningNotification("Please use Python Executable", "CONDA does not work properly on OSX. Using Python Executable instead.");
@@ -132,10 +147,14 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
             }
             options.setEnvtype(n);
         });
+        // TODO for cellpose-extension: conda-return branch
+        //condaPath.addListener((v, o, n) -> options.setCondaPath(n));
 
         // Add and populate the permanent Preference
         QuPathGUI.getInstance().getPreferencePane().getPropertySheet().getItems().add(ev2unetPathItem);
         QuPathGUI.getInstance().getPreferencePane().getPropertySheet().getItems().add(envTypeItem);
+        // TODO for cellpose-extension: conda-return branch
+        //QuPathGUI.getInstance().getPreferencePane().getPropertySheet().getItems().add(condaPathItem);
 
         // Add template scripts to the Menu
         SCRIPTS.entrySet().forEach(entry -> {
@@ -171,12 +190,12 @@ public class EfficientV2UNetExtension implements QuPathExtension, GitHubProject 
     @Override
     public Version getQuPathVersion() {
         // return the QuPath version for which this extension was written
-        return Version.parse("0.5.0");
+        //return Version.parse("0.5.0");
+        return QuPathExtension.super.getQuPathVersion();
     }
 
     @Override
     public GitHubRepo getRepository() {
-        // FIXME return the repo of the extension, TODO once on github
         return GitHubRepo.create(getName(), "DBM-MCF", "qupath-extension-efficientv2unet");
     }
 
