@@ -3,7 +3,11 @@ package qupath.ext.efficientv2unet;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
+import javafx.beans.binding.Bindings;
+import javafx.beans.binding.IntegerBinding;
+import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.collections.ListChangeListener;
 import javafx.concurrent.Task;
@@ -33,6 +37,7 @@ import java.util.concurrent.Future;
 import java.util.stream.Collectors;
 
 
+
 public class EV2UNetPredictCommand implements Runnable{
     private QuPathGUI qupath;
     private String title = "Predict an image with Efficient V2 UNet";
@@ -45,7 +50,7 @@ public class EV2UNetPredictCommand implements Runnable{
     // GUI components
     private ComboBox<String> pathClassCombo;
     private TextField modelFilePathField = new TextField();
-    private File modelFilePath = null;
+    private static File modelFilePath = null;
     private Dialog<ButtonType> dialog;
     private ButtonType btnPredict = new ButtonType("Predict", ButtonBar.ButtonData.OK_DONE);
     private Label infoModelName = new Label();
@@ -54,11 +59,11 @@ public class EV2UNetPredictCommand implements Runnable{
 
     // Prediction variables
     private String modelPath;
-    private Double threshold;
-    private Integer resolution;
-    private String anno_name;
-    private Boolean doSplit;
-    private Boolean doRemove;
+    private static Double threshold = 0.5;
+    private static Integer resolution = 1;
+    private static String anno_name;
+    private static Boolean doSplit = false;
+    private static Boolean doRemove = false;
     private List<ProjectImageEntry<BufferedImage>> selectedImages = new ArrayList<>();
 
     /**
@@ -110,6 +115,17 @@ public class EV2UNetPredictCommand implements Runnable{
         // Chooser for model file
         Label modelFilePathLabel = new Label("Path to model (.h5) file");
         Button btnChooseFile = new Button("Choose");
+        // if modelFilePath was remembered from previous run, set the text field
+        if (modelFilePath != null && modelFilePath.exists() && modelFilePath.getAbsolutePath().endsWith(".h5")) {
+            // update the text field
+            modelFilePathField.setText(modelFilePath.getAbsolutePath());
+            // set info on model parameters
+            readModelMetadata();
+            // activate the predict button
+            //dialog.getDialogPane().lookupButton(btnPredict).setDisable(listSelectionView.getTargetItems().isEmpty());
+        }
+        else modelFilePath = null;
+
         btnChooseFile.setOnAction(e -> {
             modelFilePath = FileChoosers.promptForFile(title, FileChoosers.createExtensionFilter("File types", ".h5"));
             if (modelFilePath == null) {
@@ -142,27 +158,28 @@ public class EV2UNetPredictCommand implements Runnable{
         Label pathClassLabel = new Label("Assign to class");
         pathClassCombo = new ComboBox<>();
         pathClassCombo.getItems().setAll(validPathClasses);
-        pathClassCombo.getSelectionModel().selectFirst();
-        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the Annotation-class to which the segmentation should be added",
+        if (anno_name == null) pathClassCombo.getSelectionModel().selectFirst();
+        else pathClassCombo.getSelectionModel().select(anno_name);
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the annotation-class to which the segmentation should be added",
                 pathClassLabel, pathClassCombo);
 
         // Chooser for splitting ROIs
-        CheckBox cbSplitROIs = new CheckBox("Split Annotations");
+        CheckBox cbSplitROIs = new CheckBox("Split annotations");
         cbSplitROIs.setTooltip(new Tooltip("Split the mask object into individual objects"));
-        cbSplitROIs.setSelected(false);
+        cbSplitROIs.setSelected(doSplit);
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Split the mask object into individual objects",
                 cbSplitROIs, cbSplitROIs, cbSplitROIs);
 
         // Chooser for removing existing ROIs
-        CheckBox cbRemoveAnnos = new CheckBox("Remove existing Objects");
-        cbRemoveAnnos.setTooltip(new Tooltip("Remove ALL existing Objects before adding the predicted objects"));
-        cbRemoveAnnos.setSelected(false);
-        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Remove ALL existing Objects before adding the predicted objects",
+        CheckBox cbRemoveAnnos = new CheckBox("Remove existing objects");
+        cbRemoveAnnos.setTooltip(new Tooltip("Remove ALL existing objects before adding the predicted objects"));
+        cbRemoveAnnos.setSelected(doRemove);
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Remove ALL existing objects before adding the predicted objects",
                 cbRemoveAnnos, cbRemoveAnnos, cbRemoveAnnos);
 
         // Slider for threshold
         Label thresholdLabel = new Label("Threshold");
-        Slider thresholdSlider = new Slider(0.0, 1.0, 0.5);
+        Slider thresholdSlider = new Slider(0.0, 1.0, threshold);
         thresholdSlider.setBlockIncrement(0.05);
         thresholdSlider.setMajorTickUnit(0.1);
         thresholdSlider.setMinorTickCount(1);  // to allow only 0.05 steps
@@ -178,9 +195,13 @@ public class EV2UNetPredictCommand implements Runnable{
         Label resolutionLabel = new Label("Inference resolution");
         ComboBox<String> resolutionCombo = new ComboBox<>();
         resolutionCombo.getItems().setAll("1", "2", "3");
-        resolutionCombo.getSelectionModel().selectFirst();
+        resolutionCombo.getSelectionModel().select(resolution.toString());
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the resolution for the inference (1 = full resolution, 2 = 1/2 original resolution, 3 = 1/3 original resolution)",
                 resolutionLabel, resolutionCombo);
+        resolutionCombo.setOnAction(e -> {
+            // set the static variable to remember it for later and next dialog
+            resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
+        });
 
         // Image entry pane     ------------------------------------------------
         availableImageList = project.getImageList();
@@ -222,21 +243,23 @@ public class EV2UNetPredictCommand implements Runnable{
 
         Optional<ButtonType> result = dialog.showAndWait();
 
-        // Dialog readout and actions       ------------------------------------
-        // If dialog is cancelled
-        if (!result.isPresent() || result.get() != btnPredict || result.get() == ButtonType.CANCEL) {
-            logger.warn("dialog was cancelled");
-            return false;
-        }
-
-        // Get the dialog selections and set them to the class variables
-        modelPath = modelFilePath.getAbsolutePath();
+        // Get the dialog choices and update the static variables to remember the selected choices
         anno_name = pathClassCombo.getSelectionModel().getSelectedItem();
         doSplit = cbSplitROIs.isSelected();
         doRemove = cbRemoveAnnos.isSelected();
         threshold = thresholdSlider.getValue();
-        resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
+        // resolution already taken care of with 'onAction'
+        //resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
         selectedImages = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
+
+        // Dialog readout and actions       ------------------------------------
+        // If dialog is cancelled
+        if (!result.isPresent() || result.get() != btnPredict || result.get() == ButtonType.CANCEL) {
+            //logger.warn("dialog was cancelled");
+            return false;
+        }
+        // Get the dialog model path only when dialog is okayed
+        modelPath = modelFilePath.getAbsolutePath();
         return true;
 
     } // end createAndShowDialog

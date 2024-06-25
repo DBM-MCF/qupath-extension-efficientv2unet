@@ -60,7 +60,7 @@ public class EV2UNetTrainCommand implements Runnable {
 
     // GUI
     private Dialog<ButtonType> dialog = null;
-    private Boolean export_only = false;
+    private static Boolean export_only = false;
     // own GUI elements
     private ComboBox<String> pathClassCropCombo;
     private ComboBox<String> pathClassFGCombo;
@@ -69,11 +69,11 @@ public class EV2UNetTrainCommand implements Runnable {
     private TextField epochsField;
 
     // Train variables
-    private String cropSelection;
-    private String fgSelection;
-    private String baseModel;
-    private int epochs;
-    private List<ProjectImageEntry<BufferedImage>> selectedImages;
+    private static String cropSelection = null;
+    private static String fgSelection = null;
+    private static String baseModel = "b0";
+    private static int epochs = 100;
+    private static List<ProjectImageEntry<BufferedImage>> selectedImages;
 
     /**
      * Constructor
@@ -114,6 +114,9 @@ public class EV2UNetTrainCommand implements Runnable {
             GuiTools.showNoProjectError(title);
             return false;
         }
+        System.out.println("selected images: " + selectedImages);
+        System.out.println(selectedImages == null);
+
 
         // get a list of annotation classes in the project
         ArrayList<String> allPathClassesList = new ArrayList<>();
@@ -134,7 +137,7 @@ public class EV2UNetTrainCommand implements Runnable {
         // First row, option to save image/mask paris only
         CheckBox cbExportOnly = new CheckBox("Only export image / mask pairs?");
         cbExportOnly.setTooltip(new Tooltip("No training, only exporting image / mask pairs"));
-        cbExportOnly.setSelected(false);
+        cbExportOnly.setSelected(export_only);
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Option to only export image / mask pairs",
                 cbExportOnly, cbExportOnly, cbExportOnly);
 
@@ -142,7 +145,8 @@ public class EV2UNetTrainCommand implements Runnable {
         Label cropChoiceLabel = new Label("Region for image cropping (optional)");
         pathClassCropCombo = new ComboBox<>();
         pathClassCropCombo.getItems().setAll(allPathClassesList);
-        pathClassCropCombo.getSelectionModel().selectFirst();
+        if (cropSelection == null) pathClassCropCombo.getSelectionModel().selectFirst();
+        else pathClassCropCombo.getSelectionModel().select(cropSelection);
 
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the kind of Annotation class used for image cropping.",
                 cropChoiceLabel, cropChoiceLabel, cropChoiceLabel, pathClassCropCombo);
@@ -151,8 +155,8 @@ public class EV2UNetTrainCommand implements Runnable {
         Label fgChoiceLabel = new Label("Foreground Annotation class");
         pathClassFGCombo = new ComboBox<>();
         pathClassFGCombo.getItems().setAll(validPathClasses);
-        pathClassFGCombo.getSelectionModel().selectFirst();
-
+        if (fgSelection == null ) pathClassFGCombo.getSelectionModel().selectFirst();
+        else pathClassFGCombo.getSelectionModel().select(fgSelection);
 
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the ind of Annotation class used for 'segmenting'/foreground.",
                 fgChoiceLabel, fgChoiceLabel, fgChoiceLabel, pathClassFGCombo);
@@ -171,7 +175,6 @@ public class EV2UNetTrainCommand implements Runnable {
                 } else dialog.getDialogPane().lookupButton(btnTrain).setDisable(false);
             }
         });
-
 
         // Add action when pathClass choice changes (cannot be before listSelectionView is defined)
         pathClassFGCombo.setOnAction(e -> {
@@ -206,12 +209,19 @@ public class EV2UNetTrainCommand implements Runnable {
         Label baseModelLabel = new Label("Select the EfficientNetV2 base model");
         baseModelCombo = new ComboBox<>();
         baseModelCombo.getItems().setAll(baseModelMap.keySet().stream().sorted().toList());
-        baseModelCombo.getSelectionModel().selectFirst();
+        String key_of_value = null;
+        // Get the key (nice base model name) from the value (short model name)
+        for (Map.Entry<String, String> entry : baseModelMap.entrySet()) {
+            if (entry.getValue().equals(baseModel)) {
+                key_of_value = entry.getKey();
+            }
+        }
+        baseModelCombo.getSelectionModel().select(key_of_value);
         GridPaneUtils.addGridRow(trainPane, row++, 0, "Select the EfficientNetV2 base model to use as a training backbone.",
                 baseModelLabel, baseModelLabel, baseModelLabel, baseModelCombo);
 
         Label numEpochsLabel = new Label("Number of epochs");
-        epochsField = new TextField("100");
+        epochsField = new TextField(String.valueOf(epochs));
         epochsField.setPrefColumnCount(4);
         numericField(epochsField);
 
@@ -240,11 +250,6 @@ public class EV2UNetTrainCommand implements Runnable {
         Optional<ButtonType> result = dialog.showAndWait();
 
         //  ---------------------       Do actions      ------------------------
-        // If dialog is cancelled
-        if (!result.isPresent() || result.get() != btnTrain || result.get() == ButtonType.CANCEL) {
-            return false;
-        }
-
         // Get the dialog selections
         export_only = cbExportOnly.isSelected();
         cropSelection = pathClassCropCombo.getSelectionModel().getSelectedItem();
@@ -255,6 +260,11 @@ public class EV2UNetTrainCommand implements Runnable {
         if (epochsField.getText().isEmpty()) {
             epochs = 100;
         } else epochs = Integer.parseInt(epochsField.getText());
+
+        // If dialog is cancelled
+        if (!result.isPresent() || result.get() != btnTrain || result.get() == ButtonType.CANCEL) {
+            return false;
+        }
 
         return true;
 
