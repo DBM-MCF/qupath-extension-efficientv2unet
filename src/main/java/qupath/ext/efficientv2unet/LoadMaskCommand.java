@@ -277,6 +277,9 @@ public class LoadMaskCommand implements Runnable{
         }
         // get the annotations from the mask (all are combined into single annotation)
         List<PathObject> annotations = ContourTracing.createAnnotations(new PixelImageIJ(img_mask.getProcessor()), request, 1, 1);
+        logger.debug("mask bitdepth: " + img_mask.getBitDepth());
+        logger.debug("Number of mask objects = " + annotations.size());
+        logger.debug("what is the object annotations.get(0) " + annotations.get(0));
 
         if (split) {
             List<ROI> splitROIs = RoiTools.splitROI(annotations.get(0).getROI());
