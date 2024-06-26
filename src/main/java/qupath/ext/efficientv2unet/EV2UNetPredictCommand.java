@@ -3,11 +3,7 @@ package qupath.ext.efficientv2unet;
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
 import com.google.gson.stream.JsonReader;
-import javafx.beans.binding.Bindings;
-import javafx.beans.binding.IntegerBinding;
-import javafx.beans.property.IntegerProperty;
 import javafx.beans.property.ObjectProperty;
-import javafx.beans.property.SimpleIntegerProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.collections.ListChangeListener;
 import javafx.concurrent.Task;
@@ -482,7 +478,8 @@ public class EV2UNetPredictCommand implements Runnable{
             updateProgress(count, final_count);
             count++;
             updateMessage("Exporting images...");
-            ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict);
+            //ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict); Fixme
+            HashMap<ProjectImageEntry<BufferedImage>, File> tempFiles = ops.exportImagesToPredict(imagesToPredict);
             logger.info("Exported temp images.");
 
             // Start the prediction
@@ -552,7 +549,8 @@ public class EV2UNetPredictCommand implements Runnable{
             count++;
             updateMessage("Loading predictions...");
             Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotation class name
-            ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map);
+            //ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map); FIXME
+            ops.batch_load_maskFiles(tempFiles, splitAnnotations, removeExistingAnnotations, label_name_map);
             logger.info("Predictions loaded.");
 
             // Delete the temp files

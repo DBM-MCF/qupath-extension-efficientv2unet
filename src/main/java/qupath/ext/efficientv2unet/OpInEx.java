@@ -253,7 +253,20 @@ public class OpInEx {
         return file_list;
     }
 
+    public void batch_load_maskFiles(HashMap<ProjectImageEntry<BufferedImage>, File> mapped_files,
+                                     boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        if (mapped_files == null || mapped_files.isEmpty()) {
+            logger.error("No mask files to load");
+            return;
+        }
+        for (Map.Entry<ProjectImageEntry<BufferedImage>, File> entry : mapped_files.entrySet()) {
+            load_maskFile(entry.getValue(), entry.getKey(), doSplit, doRemove, map_anno_class);
+        }
+    }
+
+
     /**
+     * @deprecated
      * For a list of mask files, will find the matching QuPath image entry (based on image name),
      * then load the mask using the load_maskFile function.
      * @param file_list = List of mask files
@@ -263,6 +276,7 @@ public class OpInEx {
      * @param map_anno_class = Map<Integer, String>, map of label id (intestine in mask) mapped to
      *                         the class name that the that annotation should be added to.
      */
+    @Deprecated
     public void batch_load_maskFiles(List<File> file_list, List<ProjectImageEntry<BufferedImage>> image_entries,
                                      boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
         if (file_list == null || file_list.isEmpty()) {
@@ -357,11 +371,60 @@ public class OpInEx {
     }
 
     /**
+     * Save a list of ImageEntries to the temp folder.
+     * Same as the previous exportTempImages, but returns a map of image entries linked to their temp files.
+     *
+     * @param imageList: List of ProjectImageEntry
+     * @return HashMap of ProjectImageEntry<BufferedImage> to temp file
+     */
+    public HashMap<ProjectImageEntry<BufferedImage>, File> exportImagesToPredict(List<ProjectImageEntry<BufferedImage>> imageList) {
+        // Initialise return map
+        HashMap<ProjectImageEntry<BufferedImage>, File> out_files = new HashMap<ProjectImageEntry<BufferedImage>, File>();
+
+        imageList.forEach(i -> {
+            // get the QuPath image name and uri
+            String image_name = i.getImageName();
+            List<URI> uri = null;
+            try {
+                uri = i.getURIs().stream().collect(Collectors.toList());
+            } catch (IOException ex) {
+                logger.error("Error: could not get image path for image: <" + image_name + ">");
+            }
+            if (uri == null) logger.error("Error: could not read image path for image <" + image_name + ">");
+            else if (uri.size() > 1) logger.error("Error: more than one image path for image <" + image_name + ">");
+            else {
+                // save image to temp folder
+                image_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
+                File out_file = new File(temp_dir, image_name + ".tif");
+                ImageData<BufferedImage> image_data = null;
+                try {
+                    image_data = i.readImageData();
+                } catch (IOException ex) {
+                    throw new RuntimeException("Could not read image dta for " + image_name);
+                }
+                try {
+                    ImageWriterTools.writeImage(image_data.getServer(), out_file.getAbsolutePath());
+                    // add ImageEntry and file to retrun map
+                    out_files.put(i, out_file);
+                    // remember the temp file in class variable
+                    temp_files.add(out_file);
+                    logger.trace("Saved image " + out_file.getAbsolutePath());
+                } catch (IOException ex) {
+                    throw new RuntimeException("Could not save image " + out_file.getAbsolutePath());
+                }
+            }
+        });
+        return out_files;
+    }
+
+    /**
+     * @deprecated
      * Saves a list of images to the temp folder
      *
      * @param imageList = List of ProjectImageEntries to be saved as tif
      * @return List of saved files
      */
+    @Deprecated
     public ArrayList<File> exportTempImages(List<ProjectImageEntry<BufferedImage>> imageList) {
         // remember the files that have been written (return of this function)
         ArrayList<File> out_files = new ArrayList<File>();
@@ -369,12 +432,12 @@ public class OpInEx {
         imageList.forEach(i -> {
             // get the file name as it is in QuPath
             String image_name = i.getImageName();
-            // since getImageName is odd, i get the image name from the uri
+            // since getImageName is odd, we get the image name from the uri
             List<URI> uri = null;
             try {
                 uri = i.getURIs().stream().collect(Collectors.toList());
             } catch (IOException ex)  {
-                logger.error("Error: could not get image path fro image: " + image_name);
+                logger.error("Error: could not get image path for image: " + image_name);
             }
             if (uri == null) logger.error("Error: could not read image path for image <" + image_name + ">");
             else if (uri.size() > 1) logger.error("Error: multiple paths for image <" + image_name + ">: currently not supported");
