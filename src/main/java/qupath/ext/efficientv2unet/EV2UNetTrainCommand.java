@@ -50,6 +50,7 @@ public class EV2UNetTrainCommand implements Runnable {
     private static final Logger logger = LoggerFactory.getLogger(EV2UNetTrainCommand.class);
     private ObjectProperty<Future<?>> runningTask = new SimpleObjectProperty<>();
     private static final  Map<String, String> baseModelMap = Map.of("EfficientNetV2-B0", "b0", "EfficientNetV2-B1", "b1", "EfficientNetV2-B2", "b2", "EfficientNetV2-B3", "b3","EfficientNetV2-S", "s", "EfficientNetV2-M", "m","EfficientNetV2-L", "l");
+    private static final List<Integer> batchNumbers = new ArrayList<>(Arrays.asList(1, 2, 4, 8, 16, 32, 64));
 
     // Class variables
     private Project<BufferedImage> project;
@@ -64,6 +65,7 @@ public class EV2UNetTrainCommand implements Runnable {
     // own GUI elements
     private ComboBox<String> pathClassCropCombo;
     private ComboBox<String> pathClassFGCombo;
+    private ComboBox<Integer> batchSizeCombo;
     private ButtonType btnTrain = new ButtonType("Export & Train", ButtonBar.ButtonData.OK_DONE);
     private ComboBox<String> baseModelCombo;
     private TextField epochsField;
@@ -73,6 +75,7 @@ public class EV2UNetTrainCommand implements Runnable {
     private static String fgSelection = null;
     private static String baseModel = "b0";
     private static int epochs = 100;
+    private static int batchSize = 32;
     private static List<ProjectImageEntry<BufferedImage>> selectedImages;
 
     /**
@@ -114,8 +117,8 @@ public class EV2UNetTrainCommand implements Runnable {
             GuiTools.showNoProjectError(title);
             return false;
         }
-        System.out.println("selected images: " + selectedImages);
-        System.out.println(selectedImages == null);
+        //System.out.println("selected images: " + selectedImages);
+        //System.out.println(selectedImages == null);
 
 
         // get a list of annotation classes in the project
@@ -228,6 +231,14 @@ public class EV2UNetTrainCommand implements Runnable {
         GridPaneUtils.addGridRow(trainPane, row++, 0, "Number of epochs to train for.",
                 numEpochsLabel, numEpochsLabel, numEpochsLabel, epochsField);
 
+        Label numBatchSizeLabel = new Label("Training batch size");
+        batchSizeCombo = new ComboBox<>();
+        System.out.println("batchSize: " + batchSize);
+        batchSizeCombo.getItems().setAll(batchNumbers.stream().sorted().toList());
+        batchSizeCombo.getSelectionModel().select(batchNumbers.indexOf(batchSize));
+        GridPaneUtils.addGridRow(trainPane, row++, 0, "Reducing the training batch size can avoid out of memory errors.",
+                numBatchSizeLabel, numBatchSizeLabel, numBatchSizeLabel, batchSizeCombo);
+
         // Create and show the dialog       ------------------------------------
         FXUtils.getContentsOfType(optionsPane, Label.class, false).forEach(e -> e.setMinWidth(160));
         FXUtils.getContentsOfType(trainPane, Label.class, false).forEach(e -> e.setMinWidth(160));
@@ -256,6 +267,8 @@ public class EV2UNetTrainCommand implements Runnable {
         fgSelection = pathClassFGCombo.getSelectionModel().getSelectedItem();
         baseModel = baseModelMap.get(baseModelCombo.getSelectionModel().getSelectedItem());
         selectedImages = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
+        batchSize = batchSizeCombo.getSelectionModel().getSelectedItem();
+
         // Set the epochs to 100 if empty string
         if (epochsField.getText().isEmpty()) {
             epochs = 100;
@@ -319,7 +332,7 @@ public class EV2UNetTrainCommand implements Runnable {
      * Calls the corresponding train method, with the variables defined in the dialog
      */
     private void train() {
-        train(cropSelection, fgSelection, baseModel, epochs, selectedImages);
+        train(cropSelection, fgSelection, baseModel, epochs, batchSize, selectedImages);
     }
 
 
@@ -330,6 +343,7 @@ public class EV2UNetTrainCommand implements Runnable {
      * @param fg_selection: String name of the ground truth annotation labelling
      * @param base_model: String name of the base model (b0, b1, b2, b3, s, m or l)
      * @param epochs: Integer number of epochs
+     * @param batch_size: Integer training batch size
      * @param selected_images: List of ProjectImageEntry to be exported and used for training
      */
     public void train(
@@ -337,10 +351,11 @@ public class EV2UNetTrainCommand implements Runnable {
             String fg_selection,
             String base_model,
             int epochs,
+            int batch_size,
             List<ProjectImageEntry<BufferedImage>> selected_images) {
 
         // Create task for training
-        TrainTask worker = new TrainTask(crop_selection, fg_selection, base_model, epochs, selected_images);
+        TrainTask worker = new TrainTask(crop_selection, fg_selection, base_model, epochs, batch_size, selected_images);
 
         ProgressDialog progress = new ProgressDialog(worker);
         progress.initOwner(qupath.getStage());
@@ -409,6 +424,7 @@ public class EV2UNetTrainCommand implements Runnable {
         private Integer epochs;
         private List<ProjectImageEntry<BufferedImage>> selected_images;
         private OpInEx ops;
+        private Integer batch_size;
         private boolean quietCancel = false;
         private EV2UnetSetup setup = EV2UnetSetup.getInstance();
         private int error = 1; // 0 = cancelled, 1 = all fine, 2 = not enough training images,
@@ -420,6 +436,7 @@ public class EV2UNetTrainCommand implements Runnable {
          * @param fg_selection: String name of the ground truth annotation labelling
          * @param base_model: String name of the base model (b0, b1, b2, b3, s, m or l)
          * @param epochs: Integer number of epochs
+         * @param batch_size: Integer batch size
          * @param selected_images: List of ProjectImageEntry to be exported and used for training
          */
         public TrainTask(
@@ -427,11 +444,13 @@ public class EV2UNetTrainCommand implements Runnable {
                 String fg_selection,
                 String base_model,
                 int epochs,
+                int batch_size,
                 List<ProjectImageEntry<BufferedImage>> selected_images) {
             this.crop_selection = crop_selection;
             this.fg_selection = fg_selection;
             this.base_model = base_model;
             this.epochs = epochs;
+            this.batch_size = batch_size;
             this.selected_images = selected_images;
             this.ops = new OpInEx(qupath);
         }
@@ -551,6 +570,8 @@ public class EV2UNetTrainCommand implements Runnable {
             args.add(base_model);
             args.add("--epochs");
             args.add(epochs.toString());
+            args.add("--train_batch_size");
+            args.add(batch_size.toString());
             venv.setArguments(args);
 
             // run the command

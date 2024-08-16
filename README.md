@@ -67,6 +67,8 @@ Only images containing such annotations are selectable in the GUI.
 - Specify the number of epochs you want to train your model for.
   - A starting point epochs = 50, but more is usually better.
   - Training a model, will also save the best-checkpoint model (with the best binary IoU metrics)
+- Specify the training batch size.
+    - Reducing the batch size will prevent out of memory errors, especially useful for GPU with lower memory.
 
 Similarly, you can use the provided script template in `Extensions > Efficient V2 UNet > Script templates > EV2UNet training script template` with annotation data already organised.
 
