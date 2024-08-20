@@ -3,9 +3,11 @@ package qupath.ext.efficientv2unet;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileFilter;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
@@ -502,6 +504,7 @@ public class OpInEx {
      * @param cropPathClass: String name for Annotation class to be used for region cropping (or null if no cropping)
      * @param fgPathClass: String name for Annotation class used as foreground label
      */
+    // TODO check the image sizes it should not be below 256 in XY (check also if 256 is the correct number in my efficient net code)
     public void exportImageMaskPair(List<ProjectImageEntry<BufferedImage>> imageList, String cropPathClass, String fgPathClass) {
         // loop over the ProjectImageEntries
         imageList.forEach(image -> {
@@ -588,169 +591,83 @@ public class OpInEx {
     } // export_images
 
 
-
-
-
-
-    //      ---------------- FIXME old testing functions    --------------------
-
-
-
-    public void load_a_segmentation(String path, String anno_name) {
-        // FIXME I am immediately overwriting the file path variable for testing
-        create_output_folders(); // FIXME temp
-        path = new File(masks_dir, "mCherry.tif").getAbsolutePath(); // FIXME temp
-
-        // get the imageData and check that an image is open
-        ImageData<BufferedImage> imageData = qupath.getImageData();
-        if (imageData == null) {
-            GuiTools.showNoImageError("Please open an image first");
-            return; // return if no image (ends the function)
-        }
-
-        // load the mask
-        List<PathObject> annotations;
-        try {
-            SimpleImage image = new PixelImageIJ(IJ.openImage(path).getProcessor());
-            annotations = ContourTracing.createAnnotations(image, RegionRequest.createAllRequests(imageData.getServer(), 1).get(0), 1, 1);
-        }
-        catch (Exception e) {
-            logger.error("Unable to load mask", e);
-            return;
-        }
-        try {
-            assert annotations.size() == 1;
-        }
-        catch (AssertionError e) {
-            logger.error("Something went wrong, there should be only one annotation, but found {}", annotations.size(), e);
-        }
-        PathObject anno = annotations.get(0);
-        anno.setName("EfficientV2UNet_Results");
-        anno.setPathClass(PathClass.getInstance(anno_name));
-        logger.info("is annotation = {}", anno.isAnnotation());
-        // add the annotations to the image
-        imageData.getHierarchy().addObjects(annotations);
-
-
-        // load the mask as simple image (for single channel will do)
-        //SimpleImage image = mask.
-        // use contour tracing for creating annotaitons
-
-    }
-
     /**
-     * Gets (currently) the current image and saves the image and mask into
-     * corresponding folders.
-     * Uses ROI_name to crop the input image.
-     * Uses anno_name as objects of interest (which will have a value of 1).
-     * @param ROI_name String: currently a placeholder for a PathClass
-     * @param anno_name String: currently a placeholder for PathClass
+     * Helper function to avoid manually reorganizing the training data,
+     * after a training has already been initialised within the project.
+     * Moves training images and masks, that were already split in train/val/test,
+     * back to the original folders (images / masks folders).
+     * And deletes the sub-folders (including image crops/patches).
      */
-    public void write_an_image(String ROI_name, String anno_name) {
-        // create output folders
-        logger.info("Creating output folders");
-        create_output_folders();
-        // get the imageData and image name
-        ImageData<BufferedImage> imageData = qupath.getImageData();
-        
-        String image_name = null;
-        try {
-            image_name = imageData.getServer().getMetadata().getName();
-        }
-        catch (Exception e) {
-            GuiTools.showNoImageError("Please open an image first");
-            return; // return if no image
-        }
-        image_name = GeneralTools.stripExtension(image_name); // remove extension
-        logger.info("image_name= " + image_name);
-
-        // get all image annotations
-        Collection<PathObject> all_annos = imageData.getHierarchy().getAnnotationObjects();
-        // get only the ones called "ROIS"
-        List<PathObject> rois = all_annos.stream().filter(a -> a.getPathClass() == PathClass.getInstance(ROI_name)).collect(Collectors.toList());
-        ROI requestROI;
-        int downsample = 1;
-        if (rois.isEmpty()) {
-            logger.warn("No annotations called '{}' found", ROI_name);
-            // create ROI for full image
-            Geometry roi = createRectangle(0, 0, imageData.getServer().getWidth(), imageData.getServer().getHeight());
-            requestROI = geometryToROI(roi, ImagePlane.getDefaultPlane());
-        }
-        else if (rois.size() > 1) {
-            logger.info("Found {} '{}'", rois.size(), ROI_name);
-            requestROI = make_single_roi(rois);
-            // test the roi on the image
-            //PathObject anno = createAnnotationObject(roi, PathClass.getInstance("Other"));
-            //imageData.getHierarchy().addObject(anno);
-
-        }
-        else {
-            logger.info("Found exactly 1 '{}'", ROI_name);
-            requestROI = rois.get(0).getROI();
-        }
-        // create region request from the defined ROI
-        RegionRequest request = RegionRequest.createInstance(imageData.getServer().getPath(),downsample, requestROI);
-
-        // create the mask of the region
-        LabeledImageServer mask = new LabeledImageServer.Builder(imageData)
-                .backgroundLabel(0, ColorTools.BLACK)
-                .multichannelOutput(false)
-                .useAnnotations()
-                .addLabel(anno_name, 1)
-                //.useFilter(o -> o.getPathClass() == PathClass.getInstance(anno_name))
-                .build();
-
-        // write image to file
-        File image_file = new File(images_dir, image_name  + ".tif");
-        File mask_file = new File(masks_dir, image_name  + ".tif");
-        try {
-            ImageWriterTools.writeImageRegion(imageData.getServer(), request, image_file.getAbsolutePath());
-            logger.info("Wrote image to: " + image_file.getAbsolutePath());
-            ImageWriterTools.writeImageRegion(mask, request, mask_file.getAbsolutePath());
-            logger.info("Wrote mask to: " + mask_file.getAbsolutePath());
-        }
-        catch (Exception e) {
-            logger.error(e.getMessage(), e);
+    public void resetTrainFolders() {
+        List<String> subfolders = Arrays.asList("train", "val", "test");
+        // Sanity checks
+        for (String subfolder : subfolders) {
+            File image_subfolder = new File(images_dir.getAbsolutePath(), subfolder);
+            File mask_subfolder = new File(masks_dir.getAbsolutePath(), subfolder);
+            if (!image_subfolder.exists()) {
+                logger.error("The folder does not exist: " + image_subfolder.getAbsolutePath());
+                throw new RuntimeException("The folder does not exist: " + image_subfolder.getAbsolutePath());
+            }
+            if (!mask_subfolder.exists()) {
+                logger.error("The folder does not exist: " + mask_subfolder.getAbsolutePath());
+                throw new RuntimeException("The folder does not exist: " + mask_subfolder.getAbsolutePath());
+            }
         }
 
-    } // end "write_an_image" function
-
-    /**
-     * Takes a list of annotations (PathObjects) and returns a single ROI which encloses them all.
-     * @param rois: list of PathObjects
-     * @return ROI
-     */
-    private ROI make_single_roi(List<PathObject> rois) {
-        // Find the min/max x and y
-        double x_min = Double.POSITIVE_INFINITY;
-        double y_min = Double.POSITIVE_INFINITY;
-        double x_max = 0;
-        double y_max = 0;
-        for (int i = 0; i < rois.size(); i++) {
-            double t_l_x = rois.get(i).getROI().getBoundsX(); // top left x
-            double t_l_y = rois.get(i).getROI().getBoundsY(); // top left y
-            double b_r_x = rois.get(i).getROI().getBoundsX() + rois.get(i).getROI().getBoundsWidth(); // bottom right x
-            double b_r_y = rois.get(i).getROI().getBoundsY() + rois.get(i).getROI().getBoundsHeight(); // bottom right y
-
-            if (t_l_x < x_min) x_min = t_l_x;
-            if (t_l_y < y_min) y_min = t_l_y;
-            if (b_r_x > x_max) x_max = b_r_x;
-            if (b_r_y > y_max) y_max = b_r_y;
+        // Get the images and masks that need to be moved
+        List<File> image_files = new ArrayList<>();
+        List<File> mask_files = new ArrayList<>();
+        // Image files in the 3 subfolders
+        for (String subfolder : subfolders) {
+            for (File f : new File(images_dir.getAbsolutePath(), subfolder).listFiles()) {
+                if (f.getName().endsWith(".tif")) image_files.add(f);
+            }
         }
-        Geometry geo = createRectangle(x_min, y_min, x_max - x_min, y_max - y_min);
-        return geometryToROI(geo, rois.get(0).getROI().getImagePlane()); // return a ROI
-    }
+        // Mask files in the 3 subfolders
+        for (String subfolder : subfolders) {
+            for (File f : new File(masks_dir.getAbsolutePath(), subfolder).listFiles()) {
+                if (f.getName().endsWith(".tif")) mask_files.add(f);
+            }
+        }
 
-    //      --------- TODO: List of ideas for future development    ------------
-    //
+        // Move the images and masks
+        for (File f : image_files) {
+            File movedFile = new File(images_dir, f.getName());
+            boolean isMoved = f.renameTo(movedFile);
+            if (!isMoved) logger.error("Could not move file: " + f.getAbsolutePath());
+            else logger.trace("Moved file to: " + movedFile.getAbsolutePath());
+        }
+        for (File f : mask_files) {
+            File movedFile = new File(masks_dir, f.getName());
+            boolean isMoved = f.renameTo(movedFile);
+            if (!isMoved) logger.error("Could not move file: " + f.getAbsolutePath());
+            else logger.trace("Moved file to: " + movedFile.getAbsolutePath());
+        }
 
-    /*
-     * TODO IDEA:
-     * Have a tile writer directily for training?
-     * see:
-     * https://github.com/qupath/qupath/blob/13bdeed047b4d05f35f47308b36b48c0f2bb3a24/qupath-core/src/main/java/qupath/lib/images/writers/TileExporter.java#L564
-     *
-     */
+        // Delete the train/val/test subfolders
+        List<Path> folders = new ArrayList<>();
+        for (String subfolder : subfolders) {
+            folders.add(Paths.get(images_dir.getAbsolutePath(), subfolder));
+            folders.add(Paths.get(masks_dir.getAbsolutePath(), subfolder));
+        }
 
+        for (Path folder : folders) {
+            try {
+                Files.walk(folder).sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.delete(path);
+                        logger.trace("Deleted file: " + path);
+                    } catch (IOException e) {
+                        logger.error("Could not delete file: " + path);
+                        logger.error(e.getMessage(), e);
+                        throw new RuntimeException("Could not delete file: " + path);
+                    }
+                });
+            } catch (IOException e) {
+                logger.error("Could not 'walk' path: " + folder);
+                throw new RuntimeException(e);
+            }
+        }
+    } // resetTrainFolders()
 
 } // end class

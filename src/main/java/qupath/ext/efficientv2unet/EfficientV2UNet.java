@@ -5,12 +5,11 @@ import ij.ImagePlus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
+import qupath.fx.dialogs.Dialogs;
 import qupath.imagej.tools.PixelImageIJ;
 import qupath.lib.analysis.images.ContourTracing;
 import qupath.lib.analysis.images.SimpleImage;
-import qupath.lib.common.GeneralTools;
 import qupath.lib.gui.QuPathGUI;
-import qupath.lib.gui.scripting.DefaultScriptEditor;
 import qupath.lib.gui.tools.GuiTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.images.writers.ImageWriterTools;
@@ -25,8 +24,12 @@ import qupath.lib.roi.interfaces.ROI;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -56,6 +59,7 @@ public class EfficientV2UNet {
         private String base_dir;
         private String name;
         private Integer epochs;
+        private Integer training_batch_size;
         private String basemodel;
         // Predict settings
         private String model_path;
@@ -175,6 +179,18 @@ public class EfficientV2UNet {
          */
         public Builder setEpochs(Integer epochs) {
             this.epochs = epochs;
+            return this;
+        }
+
+        /**
+         * Specify the training batch size.
+         * Must be a power of 2
+         * Reducing the batch size can help avoiding out of memory errors.
+         * @param training_batch_size
+         * @return
+         */
+        public Builder setTrainBatchSize(Integer training_batch_size) {
+            this.training_batch_size = training_batch_size;
             return this;
         }
 
@@ -339,6 +355,17 @@ public class EfficientV2UNet {
                 else if (epochs <= 0) {
                     throw new IllegalArgumentException("Invalid number of epochs: " + epochs);
                 }
+                // Check the training batch size
+                if (training_batch_size == null || training_batch_size <= 0) {
+                    training_batch_size = 32;
+                    logger.info("Set the training batch size to default: " + training_batch_size);
+                }
+                else if (Math.log(training_batch_size) / Math.log(2) % 1 != 0) {
+                    // Not a power of 2, round it
+                    training_batch_size = (int) Math.pow(2, Math.round(Math.log(training_batch_size) / Math.log(2)));
+                    logger.info("Rounded the training batch size to a power of 2: " + training_batch_size);
+                }
+
             }
 
             // Predict               -------------------------------------------
@@ -396,6 +423,7 @@ public class EfficientV2UNet {
             ev2unet.name = name;
             ev2unet.basemodel = basemodel;
             ev2unet.epochs = epochs;
+            ev2unet.training_batch_size = training_batch_size;
             ev2unet.predict_dir = predict_dir;
             ev2unet.predict_out_dir = predict_out_dir;
             ev2unet.resolution = resolution;
@@ -426,6 +454,7 @@ public class EfficientV2UNet {
     private String basemodel;
     private String name;
     private Integer epochs;
+    private Integer training_batch_size;
     // Predict settings
     private String predict_dir;
     private String predict_out_dir;
@@ -460,7 +489,6 @@ public class EfficientV2UNet {
             // FIXME not sure if I should check if tif files exist here or ignore it
             logger.info("Start training");
             doTrain();
-            logger.info("Finished training");
         }
         // Predict the current image
         else {
@@ -577,10 +605,16 @@ public class EfficientV2UNet {
      *
      */
     public void doTrain() {
+        // Check if training data already exist and allow to reset the split data
+        if (!resetTrainingData()) {
+            logger.warn("Training aborted. Training data split into train/val/test already exists. Manual clean-up has been selected.");
+            return;
+        }
+
         VirtualEnvironmentRunner venv = new VirtualEnvironmentRunner(
                 setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
         );
-        // build the cli arguments
+        // Build the cli arguments
         List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
         args.add("--images");
         args.add(train_image_dir);
@@ -592,6 +626,8 @@ public class EfficientV2UNet {
         args.add(name);
         args.add("--basemodel");
         args.add(basemodel);
+        args.add("--train_batch_size");
+        args.add(training_batch_size.toString());
         args.add("--epochs");
         args.add(epochs.toString());
 
@@ -610,8 +646,105 @@ public class EfficientV2UNet {
             throw new RuntimeException("CLI execution/interruption error: " + e);
         }
         List<String> log = venv.getProcessLog();
-        System.out.println("Prediction finished!");
+        System.out.println("Training finished!");
 
+    }
+
+    /**
+     * Will re-organise training data already split into train/val/test, after prompting the user.
+     * It moves images in those sub-folders back to the images/mask directories,
+     * and deletes all the sub-folders and their data.
+     * @return boolean:
+     *          - true if none of the sub-folders exist, or deletion was successful
+     *          - false if user does not want automatic file moving/deletion
+     */
+    public boolean resetTrainingData() {
+        List<String> subfolders = Arrays.asList("train", "val", "test");
+        // Sanity checks
+        boolean subfoldersExist = false;
+        for (String subfolder : subfolders) {
+            File image_subfolder = new File(train_image_dir, subfolder);
+            File mask_subfolder = new File(train_mask_dir, subfolder);
+            if (image_subfolder.exists()) {
+               subfoldersExist = true;
+               break;
+            }
+            if (mask_subfolder.exists()) {
+                subfoldersExist = true;
+                break;
+            }
+        }
+        // Continue if none of the sub-folders exist
+        if (!subfoldersExist) return true;
+
+        // Prompt user if
+        boolean reset = Dialogs.showYesNoDialog("Training data already split",
+                "The training data is already split in train/val/test.\nDo you want to reset it?\n" +
+                      "(Yes)\nWill move training images & masks\n" +
+                      "and delete all existing sub-folders and patches.\n" +
+                      "(No)\nWill abort the training and allow you to\n" +
+                      "re-organise the data manually."
+                );
+        if (!reset) return false;
+
+        // Get all files in the 3 sub-folders
+        List<File> image_files = new ArrayList<>();
+        List<File> mask_files = new ArrayList<>();
+        for (String subfolder : subfolders) {
+            for (File f : new File(train_image_dir, subfolder).listFiles()) {
+                if (f.getName().endsWith(".tif")) image_files.add(f);
+            }
+        }
+        for (String subfolder : subfolders) {
+            for (File f : new File(train_mask_dir, subfolder).listFiles()) {
+                if (f.getName().endsWith(".tif")) mask_files.add(f);
+            }
+        }
+
+        // Move files to their respective folders
+        try {
+            for (File f : image_files) {
+                File movedFile = new File(train_image_dir, f.getName());
+                boolean isMoved = f.renameTo(movedFile);
+                if (!isMoved) logger.error("Could not move file: " + f.getAbsolutePath());
+                else logger.info("Moved file to: " + movedFile.getAbsolutePath());
+            }
+            for (File f : mask_files) {
+                File movedFile = new File(train_mask_dir, f.getName());
+                boolean isMoved = f.renameTo(movedFile);
+                if (!isMoved) logger.error("Could not move file: " + f.getAbsolutePath());
+                else logger.info("Moved file to: " + movedFile.getAbsolutePath());
+            }
+        } catch (Exception e) {
+            logger.error("Exception while moving files: " + e.getLocalizedMessage());
+            throw new RuntimeException("Exception while moving files: " + e.getLocalizedMessage());
+        }
+
+        // Delete the sub-folders
+        List<Path> folders = new ArrayList<>();
+        for (String subfolder : subfolders) {
+            folders.add(Paths.get(train_image_dir, subfolder));
+            folders.add((Paths.get(train_mask_dir, subfolder)));
+        }
+        for (Path folder : folders) {
+            try {
+                Files.walk(folder).sorted(Comparator.reverseOrder()).forEach(path -> {
+                    try {
+                        Files.delete(path);
+                        logger.trace("Deleted file: " + path);
+                    } catch (IOException e) {
+                        logger.error("Could not delete file: " + path);
+                        logger.error(e.getMessage(), e);
+                        throw new RuntimeException("Could not delete file: " + path);
+                    }
+                });
+            } catch (IOException e) {
+                logger.error("Could not 'walk' the path to delete them: " + folder);
+                throw new RuntimeException(e);
+            }
+        }
+        // Return true that moving and deleting worked fine
+        return true;
     }
 
 

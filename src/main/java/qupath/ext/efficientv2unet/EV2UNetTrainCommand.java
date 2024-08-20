@@ -469,10 +469,16 @@ public class EV2UNetTrainCommand implements Runnable {
             return super.cancel(b);
         }
 
+
+        /**
+         * Check if data is already split, i.e. if the train/val/test folders are present
+         * @param path: String path to the images or masks dir
+         * @return boolean: true if data is already split
+         */
         public boolean dataAlreadySplit(String path) {
             if (new File(path, "train").exists()) return true;
-            else if (new File(path, "train").exists()) return true;
-            else if (new File(path, "train").exists()) return true;
+            else if (new File(path, "val").exists()) return true;
+            else if (new File(path, "test").exists()) return true;
             else return false;
         }
 
@@ -516,22 +522,43 @@ public class EV2UNetTrainCommand implements Runnable {
             updateMessage("Exporting images");
 
             // Check if data has already been split
-            boolean image_subdir_exists = dataAlreadySplit(ops.getImages_dir());
-            boolean mask_subdir_exists = dataAlreadySplit(ops.getMasks_dir());
-
-            if (image_subdir_exists || mask_subdir_exists) {
-                this.error = 3;
-                String msg = "Training data has already been organised into\ntrain, validation and test sets.\n";
-                if (image_subdir_exists) msg += "Please move the images in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/images'\nand delete the sub-folders.\n";
-                if (mask_subdir_exists) msg += "Please move the masks in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/masks'\nand delete the sub-folders.\n";
-                msg += "Then cancel and try again.";
-                updateMessage(msg);
-                try {
-                    TimeUnit.MINUTES.sleep(1);
-                } catch (InterruptedException e) {
-                    this.error = 3;
+            if (dataAlreadySplit(ops.getImages_dir())) {
+                // Allow for resetting to un-split (& deleting patches in sub-folders)
+                boolean reset = Dialogs.showYesNoDialog("Training data already exists",
+                        "Training images already exist for this project.\n" +
+                                "Do you to reset the training data?\n" +
+                                "(Yes)\nWill move the training images & masks,\n" +
+                                "and delete all existing sub-folders and patches.\n" +
+                                "(No)\nWill abort the dialog and let you re-organise the data manually."
+                );
+                if (reset) {
+                    ops.resetTrainFolders();
                 }
-                return null;
+                else {
+                    this.error = 3;
+                    String msg = "Training data has already been organised into\ntrain, validation and test sets.\n";
+                    if (dataAlreadySplit(ops.getImages_dir())) msg += "Please move the images in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/images'\nand delete the sub-folders.\n";
+                    if (dataAlreadySplit(ops.getMasks_dir())) msg += "Please move the masks in the 'train', 'val' & 'test'\nsub-folders to 'projectFolder/Efficient_V2_UNet/masks'\nand delete the sub-folders.\n";
+                    msg += "Then cancel and try again.";
+                    updateMessage(msg);
+                    try {
+                        TimeUnit.MINUTES.sleep(1);
+                    } catch (InterruptedException e) {
+                        this.error = 3;
+                    }
+                    return null;
+                }
+                // Make sure the data was reset properly
+                if (dataAlreadySplit(ops.getImages_dir()) || dataAlreadySplit(ops.getMasks_dir())) {
+                    this.error = 3;
+                    updateMessage("Failed to reset training data.\nPlease check that the 'projectFolder/Efficient_V2_UNet/images & masks' folders only contain images and no sub-folders.\nCancel and try again.");
+                    try {
+                        TimeUnit.MINUTES.sleep(1);
+                    } catch (InterruptedException e) {
+                        this.error = 3;
+                    }
+                    return null;
+                }
             }
 
             ops.exportImageMaskPair(selected_images, crop_selection, fg_selection);

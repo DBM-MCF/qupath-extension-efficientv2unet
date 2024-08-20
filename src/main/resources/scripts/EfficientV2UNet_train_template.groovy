@@ -25,6 +25,7 @@ def efficientV2Unet = EfficientV2UNet.builder()
         .setBasemodel("b0")                                     // Basemodel to use. Defaults to "b0". Others: b1, b2, b3, s, m, l
         .setName("myEfficientV2UNet_model")                     // Name for the model. Defaults to "myEfficientV2UNet_*basemodel*"
         .setEpochs(100)                                         // Number of epochs. Defaults to 100
+//        .setTrainBatchSize(32)                                  // Batch size. Defaults to 32. Should be a power of 2. Lower numbers may avoid out of memory errors
         .build()
 
 // start the training
