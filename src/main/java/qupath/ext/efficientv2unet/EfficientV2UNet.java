@@ -1,24 +1,15 @@
 package qupath.ext.efficientv2unet;
 
-import ij.IJ;
-import ij.ImagePlus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import qupath.ext.biop.cmd.VirtualEnvironmentRunner;
 import qupath.fx.dialogs.Dialogs;
-import qupath.imagej.tools.PixelImageIJ;
-import qupath.lib.analysis.images.ContourTracing;
-import qupath.lib.analysis.images.SimpleImage;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.tools.GuiTools;
 import qupath.lib.images.ImageData;
-import qupath.lib.images.writers.ImageWriterTools;
-import qupath.lib.objects.PathObject;
-import qupath.lib.objects.PathObjects;
-import qupath.lib.objects.classes.PathClass;
 import qupath.lib.projects.Project;
-import qupath.lib.regions.RegionRequest;
-import qupath.lib.roi.RoiTools;
+import qupath.lib.projects.ProjectImageEntry;
+import qupath.lib.roi.RectangleROI;
 import qupath.lib.roi.interfaces.ROI;
 
 import java.awt.image.BufferedImage;
@@ -27,21 +18,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
+import java.util.*;
 
 /**
- * This class should be very similar to:
+ * This class is very similar to:
  * https://github.com/BIOP/qupath-extension-cellpose/blob/main/src/main/java/qupath/ext/biop/cellpose/CellposeBuilder.java
  * 
  */
 
-// FIXME currently a problem: I want this builder, to have the possibility to use it in scripts
-//   However: - it will work with the extension
-//            - for script, i need to have an way to get the current image and save it to a default folder
-//              - need to have a way to save the image as tif, predict it, load the mask and eventually delete the temporary files
 public class EfficientV2UNet {
     private static final Logger logger = LoggerFactory.getLogger(EfficientV2UNet.class);
 
@@ -63,28 +47,19 @@ public class EfficientV2UNet {
         private String basemodel;
         // Predict settings
         private String model_path;
-        private String predict_dir;
+        private String temp_dir;
         private String predict_out_dir;
-        private Integer resolution;
+        private Integer downscale_factor;
         private Double threshold;
+        private boolean predict_in_selection = false;
+        private ROI roi;
+        private boolean delete_temp_files = false;
+        private boolean delete_prediction_files = false;
         private boolean use_less_memory = true;
         // Post-prediction settings
         private String annotation_class_name = "Region";
-        private boolean split_annotations = false;
-        private boolean remove_annotations = false;
-
-
-        /**
-         * @Deprecated - should not use this, as model_path variable is specific to predict only
-         * Constructor
-         *
-         * @param model_path: String path of the model
-         *
-        protected Builder(String model_path) {
-            this.model_path = model_path;
-            this.setup = EV2UnetSetup.getInstance();
-        }
-        */
+        private boolean split_object = false;
+        private boolean remove_objects = false;
 
         /**
          * Constructor
@@ -107,6 +82,15 @@ public class EfficientV2UNet {
         }
 
         /**
+         * Sets the train flag to true
+         * @return this Builder
+         */
+        public Builder doTrain() {
+            this.train = true;
+            return this;
+        }
+
+        /**
          * Specify whether to predict using a model
          *
          * @param predict: boolean
@@ -114,6 +98,15 @@ public class EfficientV2UNet {
          */
         public Builder doPredict(boolean predict) {
             this.predict = predict;
+            return this;
+        }
+
+        /**
+         * Sets the predict flag to true
+         * @return this Builder
+         */
+        public Builder doPredict() {
+            this.predict = true;
             return this;
         }
 
@@ -142,7 +135,7 @@ public class EfficientV2UNet {
         /**
          * Specify the base directory for saving the model
          *
-         * @param base_dir: String path to exisiting folder
+         * @param base_dir: String path to existing folder
          * @return this builder
          */
         public Builder setBaseDirectory(String base_dir) {
@@ -186,8 +179,8 @@ public class EfficientV2UNet {
          * Specify the training batch size.
          * Must be a power of 2
          * Reducing the batch size can help avoiding out of memory errors.
-         * @param training_batch_size
-         * @return
+         * @param training_batch_size: Integer batch size
+         * @return this builder
          */
         public Builder setTrainBatchSize(Integer training_batch_size) {
             this.training_batch_size = training_batch_size;
@@ -208,11 +201,11 @@ public class EfficientV2UNet {
         /**
          * Specify the directory to predict images from
          *
-         * @param predict_dir: String path to folder
+         * @param temp_dir: String path to folder
          * @return this builder
          */
-        public Builder setTempDir(String predict_dir) {
-            this.predict_dir = predict_dir;
+        public Builder setTempDir(String temp_dir) {
+            this.temp_dir = temp_dir;
             return this;
         }
 
@@ -228,14 +221,48 @@ public class EfficientV2UNet {
         }
 
         /**
-         * Specify the resolution at which the images should be predicted.
-         * e.g. 1 = full resolution, 2 = half resolution
+         * Specify the resolution/downscale-factor,
+         * at which the images should be predicted.
+         * e.g. 1 = no downscaling, 2 = half resolution
          *
-         * @param resolution: Integer
+         * @param downscale_factor: Integer
          * @return this builder
          */
-        public Builder setResolution(Integer resolution) {
-            this.resolution = resolution;
+        public Builder setDownscale_factor(Integer downscale_factor) {
+            this.downscale_factor = downscale_factor;
+            return this;
+        }
+
+        /**
+         * Specify whether to delete the temporary files.
+         * If called will set delete_temp_files to true,
+         * to flag the exported raw tifs to be deleted
+         *
+         * @return this builder
+         */
+        public Builder deleteTempFiles() {
+            this.delete_temp_files = true;
+            return this;
+        }
+
+        /**
+         * Specify whether to delete the prediction files.
+         * If called will set the delete_prediction_files to true,
+         * to flag the generated prediction tif to be deleted.
+         *
+         * @return this builder
+         */
+        public Builder deletePredictionFiles() {
+            this.delete_prediction_files = true;
+            return this;
+        }
+
+        /**
+         * Flag if to predict only in the current selection
+         * @return this builder
+         */
+        public Builder predictInSelection() {
+            this.predict_in_selection = true;
             return this;
         }
 
@@ -278,8 +305,17 @@ public class EfficientV2UNet {
          * @param split: boolean
          * @return this builder
          */
-        public Builder doSplitObject(boolean split) {
-            this.split_annotations = split;
+        public Builder splitObject(boolean split) {
+            this.split_object = split;
+            return this;
+        }
+
+        /**
+         * Sets the split_object flag to true
+         * @return this Builder
+         */
+        public Builder splitObject() {
+            this.split_object = true;
             return this;
         }
 
@@ -288,8 +324,17 @@ public class EfficientV2UNet {
          * @param remove: boolean
          * @return this builder
          */
-        public Builder doRemoveExistingAnnotations(boolean remove) {
-            this.remove_annotations = remove;
+        public Builder removeExistingObjects(boolean remove) {
+            this.remove_objects = remove;
+            return this;
+        }
+
+        /**
+         * Flags to remove all existing image objects.
+         * @return this Builder
+         */
+        public Builder removeExistingObjects() {
+            this.remove_objects = true;
             return this;
         }
 
@@ -305,7 +350,6 @@ public class EfficientV2UNet {
                 throw new IllegalStateException("You need a project to run this plugin.");
             }
             if (project.getPath() == null) throw new RuntimeException("Could not identify the path to the project. Make sure that the project is on a local file system.");
-
 
             EfficientV2UNet ev2unet = new EfficientV2UNet();
 
@@ -365,7 +409,6 @@ public class EfficientV2UNet {
                     training_batch_size = (int) Math.pow(2, Math.round(Math.log(training_batch_size) / Math.log(2)));
                     logger.info("Rounded the training batch size to a power of 2: " + training_batch_size);
                 }
-
             }
 
             // Predict               -------------------------------------------
@@ -379,18 +422,18 @@ public class EfficientV2UNet {
                 }
 
                 // Set the default temp directory (QuPathProject/temp) if not specified (and create it if it doesn't exist)
-                if (predict_dir == null) {
-                    predict_dir = new File(project.getPath().getParent().toString(), "temp").getAbsolutePath();
-                    logger.info("Set the temporary directory to default: " + predict_dir);
+                if (temp_dir == null) {
+                    temp_dir = new File(project.getPath().getParent().toString(), "temp").getAbsolutePath();
+                    logger.info("Set the temporary directory to default: " + temp_dir);
                 }
-                if (!new File(predict_dir).exists()) {
-                    new File(predict_dir).mkdirs();
-                    logger.info("Created temporary directory: " + predict_dir);
+                if (!new File(temp_dir).exists()) {
+                    new File(temp_dir).mkdirs();
+                    logger.info("Created temporary directory: " + temp_dir);
                 }
 
                 // Set the default output directory (for predictions) if not specified (and create it if it doesn't exist)
                 if (predict_out_dir == null) {
-                    predict_out_dir = new File(predict_dir, "predictions").getAbsolutePath();
+                    predict_out_dir = new File(temp_dir, "predictions").getAbsolutePath();
                     logger.info("Set the prediction output directory to default: " + predict_out_dir);
                 }
 
@@ -399,10 +442,10 @@ public class EfficientV2UNet {
                     logger.info("Created output directory: " + predict_out_dir);
                 }
 
-                // Set the default resolution if not specified
-                if (resolution == null) {
-                    resolution = 1;
-                    logger.warn("Resolution not specified, defaulting to 1 (full resolution)");
+                // Set the default downscale factor if not specified
+                if (downscale_factor == null) {
+                    downscale_factor = 1;
+                    logger.warn("Downscaling factor not specified, defaulting to 1 (no downscaling)");
                 }
 
                 // Set the default threshold if not specified
@@ -424,14 +467,17 @@ public class EfficientV2UNet {
             ev2unet.basemodel = basemodel;
             ev2unet.epochs = epochs;
             ev2unet.training_batch_size = training_batch_size;
-            ev2unet.predict_dir = predict_dir;
+            ev2unet.temp_dir = temp_dir;
             ev2unet.predict_out_dir = predict_out_dir;
-            ev2unet.resolution = resolution;
+            ev2unet.downscale_factor = downscale_factor;
+            ev2unet.delete_temp_files = delete_temp_files;
+            ev2unet.delete_prediction_files = delete_prediction_files;
+            ev2unet.predict_in_selection = predict_in_selection;
             ev2unet.threshold = threshold;
             ev2unet.use_less_memory = use_less_memory;
             ev2unet.annotation_class_name = annotation_class_name;
-            ev2unet.split_annotations = split_annotations;
-            ev2unet.remove_annotations = remove_annotations;
+            ev2unet.split_object = split_object;
+            ev2unet.remove_objects = remove_objects;
             return ev2unet;
         }
 
@@ -456,15 +502,18 @@ public class EfficientV2UNet {
     private Integer epochs;
     private Integer training_batch_size;
     // Predict settings
-    private String predict_dir;
+    private String temp_dir;
     private String predict_out_dir;
-    private Integer resolution;
+    private Integer downscale_factor;
     private Double threshold;
     private boolean use_less_memory;
+    private boolean delete_temp_files;
+    private boolean delete_prediction_files;
+    private boolean predict_in_selection;
     // Post-prediction settings
     private String annotation_class_name = "Region";
-    private boolean split_annotations = false;
-    private boolean remove_annotations = false;
+    private boolean split_object = false;
+    private boolean remove_objects = false;
 
     /**
      * Create a builder to customize EfficientV2UNet parameters
@@ -477,9 +526,18 @@ public class EfficientV2UNet {
     // EfficientV2UNet methods (e.g. to process) // TODO split into subproceses that are controlled via main one.
 
     /**
-     * This function is to be used when running via script
+     * Calls the corresponding function with null argument for the image data
      */
     public void process() {
+        process(null, null);
+    }
+
+    /**
+     * This function is to be used when running via script.
+     *
+     * @param image_data: ImageData<BufferedImage> of the current image or null. Allows to run for project
+     */
+    public void process(ImageData<BufferedImage> image_data, ROI selection) {
         if (this.predict == this.train) {
             throw new IllegalArgumentException("Specify either train or predict");
         }
@@ -493,71 +551,73 @@ public class EfficientV2UNet {
         // Predict the current image
         else {
             // Get the currently opened image
-            ImageData<BufferedImage> image_data = QuPathGUI.getInstance().getImageData();
-            String image_name = QuPathGUI.getInstance().getDisplayedImageName(image_data);
+            logger.debug("n objects: " + image_data.getHierarchy().getAllObjects(true).size());
             if (image_data == null) {
-                logger.trace("Error: Please open an image first");
-                throw new RuntimeException("--> Please open an image first <--");
+                Dialogs.showErrorMessage("No image open", "Please open an image first");
+                throw new RuntimeException("Please open an image first");
             }
-            image_name = "temp_image.tif";
-            System.out.println("Image name is now: " + image_name);
-            File temp_file = new File(this.predict_dir, image_name);
-            try {
-                ImageWriterTools.writeImage(image_data.getServer(), temp_file.getAbsolutePath());
-            } catch (IOException e) {
-                throw new RuntimeException("Could not write image!  >" + e);
-            }
-            logger.info("Saved current image to: " + temp_file.getAbsolutePath());
+            // Find the ProjectImageEntry for the current image
+            ProjectImageEntry<BufferedImage> img_entry = project.getEntry(image_data);
 
-            // predict the image
+            // Create the OpInEx object to use image export and import functions
+            OpInEx ops = new OpInEx(QuPathGUI.getInstance());
+            ops.setTemp_dir(temp_dir); // The temp dir has already been created
+            ops.setPrediction_dir(predict_out_dir); // The prediction dir has already been created
+
+            // Optionally, predict only in the current selection
+            if (predict_in_selection) {
+                // Non-rectangle ROIs will be bounding-box loaded segmentation
+                // Only allow rectangles as selections
+                if (selection == null) {
+                    logger.warn("No active selection. Using entire image for prediction!");
+                }
+                else if (selection.getClass() != RectangleROI.class) {
+                    logger.error("Only rectangle selections are supported. Selection was: " + selection.getClass());
+                    throw new RuntimeException("Only rectangle selections are supported");
+                }
+                logger.debug("selection: " + selection);
+            }
+
+            // Export the image
+            logger.info("Exporting image...");
+            HashMap<ProjectImageEntry<BufferedImage>, OpInEx.PredictionFile> map_entry_prediction = ops.exportImagesToPredict(Arrays.asList(img_entry), downscale_factor, selection);
+
+            logger.info("Predicting image...");
             doPredict();
-            logger.info("Predicted image");
 
-            // Load the mask
-            File prediction_file = new File(this.predict_out_dir, image_name);
-            ImagePlus mask = IJ.openImage(prediction_file.getAbsolutePath());
-            if (mask == null) throw new RuntimeException("Could not open predicted file: " + prediction_file.getAbsolutePath());
-            SimpleImage mask_image = new PixelImageIJ(mask.getProcessor());
-            List<PathObject> annotation = ContourTracing.createAnnotations(mask_image, RegionRequest.createAllRequests(image_data.getServer(), 1).get(0), 1, 1);
-            logger.info("Loaded predicted image");
+            logger.info("Loading prediction...");
+            Map<Integer, String> map_label_anno = Map.of(1, annotation_class_name);
+            ops.load_pred(map_entry_prediction.get(img_entry), img_entry, split_object, remove_objects, map_label_anno);
 
-            // Remove existing annotations
-            if (this.remove_annotations) {
-                image_data.getHierarchy().clearAll();
-                logger.info("Removed all existing annotations from current image");
+            logger.info("Finished loading prediction!");
+
+            // Delete all temp files that are remembered in the ops
+            if (delete_temp_files) {
+                logger.info("Deleting temporary raw file...");
+                ops.deleteTempFiles();
+            }
+            // Delete only the generated prediction file
+            if (delete_prediction_files) {
+                logger.info("Deleting temporary prediction file...");
+                ops.deletePredictionFiles(Arrays.asList(map_entry_prediction.get(img_entry).getPredictedFile()));
             }
 
-            if (this.split_annotations) {
-                List<ROI> split_ROIs = RoiTools.splitROI(annotation.get(0).getROI());
-                List<PathObject> split_annotation = new ArrayList<>();
-                split_ROIs.forEach(r -> split_annotation.add(
-                        PathObjects.createAnnotationObject(r, PathClass.getInstance(this.annotation_class_name))
-                ));
-                image_data.getHierarchy().addObjects(split_annotation);
-            } else {
-                image_data.getHierarchy().addObject(
-                        PathObjects.createAnnotationObject(annotation.get(0).getROI(), PathClass.getInstance(this.annotation_class_name))
-                );
+            // Update the viewer. Needs a dirty trick to actually load the changes...
+            ImageData<BufferedImage> img_data;
+            try {
+                // read the ImageData from the modified project entry
+                img_data = img_entry.readImageData();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
             }
-            // Fire global update event
+            // Set the current viewer ImageData-Hierarchy to the one of the modified project entry
+            image_data.getHierarchy().setHierarchy(img_data.getHierarchy());
+            // Fire the change event
             image_data.getHierarchy().fireHierarchyChangedEvent(image_data.getHierarchy());
-            logger.info("Added the predicted objects to the current image");
-
-            // Delete the temp file
-            if (temp_file.delete()) logger.trace("Deleted temporary file: " + temp_file.getAbsolutePath());
-            else logger.info("Could not delete temporary file: " + temp_file.getAbsolutePath());
-
-            // Delete temp prediction
-            if (prediction_file.delete()) logger.trace("Deleted temporary prediction file: " + prediction_file.getAbsolutePath());
-            else logger.info("Could not delete temporary prediction file: " + prediction_file.getAbsolutePath());
-
+            // No need to re-save the ImageData, since it is already saved...
         }
+    } // end process function
 
-    }
-
-
-    // FIXME: I could have a 'doPredict' with more control, that i can listen to files being created, similar to:
-    //  https://github.com/BIOP/qupath-extension-cellpose/blob/679839a95302470eb12b5038b418be7454916137/src/main/java/qupath/ext/biop/cellpose/Cellpose2D.java#L786
 
     /**
      * runs the prediction, which blocks qupath
@@ -572,11 +632,11 @@ public class EfficientV2UNet {
         // build the cli arguments
         List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--predict"));
         args.add("--dir");
-        args.add(predict_dir);
+        args.add(temp_dir);
         args.add("--model");
         args.add(model_path);
         args.add("--resolution");
-        args.add(resolution.toString());
+        args.add("1"); // The resolution here is fixed to 1, as QuPath takes care of downscaling
         args.add("--threshold");
         args.add(threshold.toString());
         args.add("--savedir");

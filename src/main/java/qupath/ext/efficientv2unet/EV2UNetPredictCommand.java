@@ -56,7 +56,7 @@ public class EV2UNetPredictCommand implements Runnable{
     // Prediction variables
     private String modelPath;
     private static Double threshold = 0.5;
-    private static Integer resolution = 1;
+    private static Integer downscale_factor = 1;
     private static String anno_name;
     private static Boolean doSplit = false;
     private static Boolean doRemove = false;
@@ -74,7 +74,7 @@ public class EV2UNetPredictCommand implements Runnable{
     public void run() {
         if (!createAndShowDialog()) return;
         // Start image prediction (one by one)
-        predictImages(); // shows a progress dialog
+        launchProgressDialog(); // shows a progress dialog
     }
 
     /**
@@ -93,7 +93,7 @@ public class EV2UNetPredictCommand implements Runnable{
         // get a list of annotation classes in the project
         ArrayList<String> allPathClassesList = new ArrayList<>();
         project.getPathClasses().forEach(c -> allPathClassesList.add(c.getName()));
-        ArrayList<String> validPathClasses  = (ArrayList<String>) allPathClassesList.clone();
+        ArrayList<String> validPathClasses = (ArrayList<String>) allPathClassesList.clone();
         validPathClasses.remove(null);
 
         // Build dialog panes
@@ -123,7 +123,8 @@ public class EV2UNetPredictCommand implements Runnable{
         else modelFilePath = null;
 
         btnChooseFile.setOnAction(e -> {
-            modelFilePath = FileChoosers.promptForFile(title, FileChoosers.createExtensionFilter("File types", ".h5"));
+            // FIXME on WIN, QuPath does not remember the last path. This seems to be the same for similar commands (open project)
+            modelFilePath = FileChoosers.promptForFile(qupath.getStage(), title, FileChoosers.createExtensionFilter("File types", ".h5"));
             if (modelFilePath == null) {
                 logger.error("Chosen file is null!");
                 dialog.getDialogPane().lookupButton(btnPredict).setDisable(true);
@@ -187,16 +188,16 @@ public class EV2UNetPredictCommand implements Runnable{
         GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select a threshold for the predicted mask",
                 thresholdLabel, thresholdSlider, tf);
 
-        // Drop-down for resolution
-        Label resolutionLabel = new Label("Inference resolution");
-        ComboBox<String> resolutionCombo = new ComboBox<>();
-        resolutionCombo.getItems().setAll("1", "2", "3");
-        resolutionCombo.getSelectionModel().select(resolution.toString());
-        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the resolution for the inference (1 = full resolution, 2 = 1/2 original resolution, 3 = 1/3 original resolution)",
-                resolutionLabel, resolutionCombo);
-        resolutionCombo.setOnAction(e -> {
-            // set the static variable to remember it for later and next dialog
-            resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
+        // Drop-down for downscale factor
+        Label downscaleLabel = new Label("Image downscaling factor");
+        ComboBox<String> downscaleCombo = new ComboBox<>();
+        downscaleCombo.getItems().setAll("1", "2", "3", "4");
+        downscaleCombo.getSelectionModel().select(downscale_factor.toString());
+        GridPaneUtils.addGridRow(optionsPane, row++, 0, "Select the image downscale factor for the prediction (1 = no downscaling, 2 = half the original image size, etc.)",
+                downscaleLabel, downscaleCombo);
+        // remember the change
+        downscaleCombo.setOnAction(e -> {
+            downscale_factor = Integer.parseInt(downscaleCombo.getSelectionModel().getSelectedItem());
         });
 
         // Image entry pane     ------------------------------------------------
@@ -244,8 +245,6 @@ public class EV2UNetPredictCommand implements Runnable{
         doSplit = cbSplitROIs.isSelected();
         doRemove = cbRemoveAnnos.isSelected();
         threshold = thresholdSlider.getValue();
-        // resolution already taken care of with 'onAction'
-        //resolution = Integer.parseInt(resolutionCombo.getSelectionModel().getSelectedItem());
         selectedImages = listSelectionView.getTargetItems().stream().collect(Collectors.toList());
 
         // Dialog readout and actions       ------------------------------------
@@ -261,23 +260,28 @@ public class EV2UNetPredictCommand implements Runnable{
     } // end createAndShowDialog
 
     /**
-     * calls the corresponding public method, with the variables defined in the dialog
+     * Launch the progress dialog,
+     * with the variables defined in the interactive dialog
      */
-    private void predictImages() {
-        predictImages(modelPath, threshold, resolution, selectedImages, anno_name, doSplit, doRemove);
+    private void launchProgressDialog() {
+        launchProgressDialog(modelPath, threshold, downscale_factor, selectedImages, anno_name, doSplit, doRemove);
     }
 
     /**
+     * Launch a progress dialog, with following tasks:
      * Saves the images to be predicted as tif files into the temp folder.
      * Calls the predict CLI, which saves the predictions into the predictions folder.
+     * Load the predictions and convert to annotations.
+     * Delete the temp files.
      * @param model_path: String path to the model h5 file
      * @param thresh: Double threshold for prediction
-     * @param res: Integer resolution to perform the prediction on, e.g. 1, 2, 3...
+     * @param res: Integer resolution/downscale-factor at which to perform the prediction on, e.g. 1, 2, 3...
      * @param images: List of ProjectImageEntry that need to be predicted
-     *
-     * @Deprecated
+     * @param annotationClassName: String name for the final annotations
+     * @param splitObject: boolean whether to split objects
+     * @param removeExistingAnnotations: boolean whether to remove existing objects
      */
-    public void predictImages(
+    public void launchProgressDialog(
             String model_path,
             Double thresh,
             Integer res,
@@ -355,13 +359,13 @@ public class EV2UNetPredictCommand implements Runnable{
         String[] metadata;
         if (file_json.exists()) {
             metadata = read_json(file_json);
-            strInfoModel += "Threshold = " + metadata[0] + "; Resolution = " + metadata[1];
-            strInfoModelBest += "Threshold = " + metadata[2] + "; Resolution = " + metadata[3];
+            strInfoModel += "Threshold = " + metadata[0] + "; Downscale factor = " + metadata[1];
+            strInfoModelBest += "Threshold = " + metadata[2] + "; Downscale factor = " + metadata[3];
         } else if (file_found.isPresent()) {
             // otherwise try to find any json
             metadata = read_json(file_found.get());
-            strInfoModel += "Threshold = " + metadata[0] + "; Resolution = " + metadata[1];
-            strInfoModelBest += "Threshold = " + metadata[2] + "; Resolution = " + metadata[3];
+            strInfoModel += "Threshold = " + metadata[0] + "; Downscale factor = " + metadata[1];
+            strInfoModelBest += "Threshold = " + metadata[2] + "; Downscale factor = " + metadata[3];
         } else {
             // else no json-file found
             strInfoModel += "No metadata json-file found";
@@ -431,22 +435,32 @@ public class EV2UNetPredictCommand implements Runnable{
         private String dir;
         private String model_path;
         private String out_dir;
-        private Integer resolution;
+        private Integer downscaleF;
         private Double threshold;
         private Integer error = 1;  // 0 = cancelled, 1 = all fine
                                     // 2 = CLI exe error, 3 = Venv error,
         private Integer cur_image_count = 1;
         private Integer count = 0;
 
-
-
-
+        /**
+         * Constructor
+         * @param imagesToPredict
+         * @param dir
+         * @param model_path
+         * @param out_dir
+         * @param downscaleF
+         * @param threshold
+         * @param annotationClassName
+         * @param splitAnnotations
+         * @param removeExistingAnnotations
+         * @param ops
+         */
         public PredictTask(
                 List<ProjectImageEntry<BufferedImage>> imagesToPredict,
                 String dir,
                 String model_path,
                 String out_dir,
-                Integer resolution,
+                Integer downscaleF,
                 Double threshold,
                 String annotationClassName,
                 boolean splitAnnotations,
@@ -456,7 +470,7 @@ public class EV2UNetPredictCommand implements Runnable{
             this.dir = dir;
             this.model_path = model_path;
             this.out_dir = out_dir;
-            this.resolution = resolution;
+            this.downscaleF = downscaleF;
             this.threshold = threshold;
             this.annotationClassName = annotationClassName;
             this.splitAnnotations = splitAnnotations;
@@ -478,8 +492,8 @@ public class EV2UNetPredictCommand implements Runnable{
             updateProgress(count, final_count);
             count++;
             updateMessage("Exporting images...");
-            //ArrayList<File> tempFiles = ops.exportTempImages(imagesToPredict); Fixme
-            HashMap<ProjectImageEntry<BufferedImage>, File> tempFiles = ops.exportImagesToPredict(imagesToPredict);
+
+            HashMap<ProjectImageEntry<BufferedImage>, OpInEx.PredictionFile> map_files = ops.exportImagesToPredict(imagesToPredict, downscaleF, null);
             logger.info("Exported temp images.");
 
             // Start the prediction
@@ -549,15 +563,18 @@ public class EV2UNetPredictCommand implements Runnable{
             count++;
             updateMessage("Loading predictions...");
             Map<Integer, String> label_name_map = Map.ofEntries(Map.entry(1, annotationClassName)); // map of label id to annotation class name
-            //ops.batch_load_maskFiles(ops.getPredictionFiles(), imagesToPredict, splitAnnotations, removeExistingAnnotations, label_name_map); FIXME
-            ops.batch_load_maskFiles(tempFiles, splitAnnotations, removeExistingAnnotations, label_name_map);
+
+            ops.load_predictions(map_files, splitAnnotations, removeExistingAnnotations, label_name_map);
             logger.info("Predictions loaded.");
 
             // Delete the temp files
             updateProgress(count, final_count);
             count++;
             updateMessage("Deleting temporary files...");
-            ops.deleteTempFiles();
+            boolean deleted = ops.deleteTempFiles();
+            if (!deleted) logger.warn("Could not delete all temporary files.");
+
+            // FIXME this still seems a bit crude... could be made better...
             ops.deletePredictionFiles(ops.getPredictionFiles());
             logger.info("Deleted temporary files.");
 
@@ -588,7 +605,7 @@ public class EV2UNetPredictCommand implements Runnable{
             args.add("--model");
             args.add(model_path);
             args.add("--resolution");
-            args.add(resolution.toString());
+            args.add("1"); // The resolution here is fixed to 1, as QuPath takes care of downscaling
             args.add("--threshold");
             args.add(threshold.toString());
             args.add("--savedir");

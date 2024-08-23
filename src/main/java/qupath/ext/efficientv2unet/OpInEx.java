@@ -27,6 +27,7 @@ import qupath.lib.common.GeneralTools;
 import qupath.lib.images.ImageData;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.tools.GuiTools;
+import qupath.lib.images.servers.ImageServer;
 import qupath.lib.images.servers.LabeledImageServer;
 import qupath.lib.images.writers.ImageWriterTools;
 import qupath.lib.objects.PathObject;
@@ -102,6 +103,31 @@ public class OpInEx {
      */
     public String getTemp_dir() {
         return temp_dir.getAbsolutePath();
+    }
+
+    /**
+     * Set the temp_dir class variable.
+     * Expects the path to exist. Throws exception if not.
+     * @param path: String path to folder
+     */
+    public void setTemp_dir(String path) {
+        temp_dir = new File(path);
+        if (!temp_dir.exists()) {
+            throw new RuntimeException("Temporary folder does not exist: " + temp_dir.getAbsolutePath());
+        }
+    }
+
+    /**
+     * Set the prediction_dir class variable.
+     * Expects the path to exist. Throws exception if not.
+     * @param path: String path to folder
+     */
+    public void setPrediction_dir(String path) {
+        prediction_dir = new File(path);
+        if (!prediction_dir.exists()) {
+            throw new RuntimeException("Prediction folder does not exist: " + prediction_dir.getAbsolutePath());
+        }
+
     }
 
     /**
@@ -183,16 +209,21 @@ public class OpInEx {
      * @return boolean
      */
     public boolean deleteTempFiles() {
-        if (temp_files != null) {
+        ArrayList<File> temp_files_copy = new ArrayList<>();
+        if (temp_files != null && !temp_files.isEmpty()) {
             temp_files.forEach(f -> {
                 if (f.delete()) {
-                    logger.trace("Deleted temp file: " + f.getAbsolutePath());
+                    logger.info("Deleted temp file: " + f.getAbsolutePath());
                 }
-                else logger.trace("Could not delete temp file: " + f.getAbsolutePath());
+                else {
+                    logger.warn("Could not delete temp file: " + f.getAbsolutePath());
+                    temp_files_copy.add(f);
+                }
             });
-            return true;
+            temp_files = temp_files_copy;
+            return temp_files.isEmpty();
         }
-        else return false;
+        return false;
     }
 
     /**
@@ -256,6 +287,21 @@ public class OpInEx {
         return file_list;
     }
 
+
+    /**
+     * @deprecated
+     * Use: load_predictions(HashMap<ProjectImageEntry<BufferedImage>, PredictionFile> map_files,
+     *                       boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class)
+     *
+     * For all ProjectImageEntries will load the predicted tif files and add
+     * the objects to the ProjectImageEntry.
+     *
+     * @param mapped_files = Map of ProjectImageEntry<BufferedImage> and corresponding predicted File
+     * @param doSplit = boolean, whether to split the found objects
+     * @param doRemove = boolean, whether to remove all existing objects
+     * @param map_anno_class = Map of labels to annotation classes
+     */
+    @Deprecated
     public void batch_load_maskFiles(HashMap<ProjectImageEntry<BufferedImage>, File> mapped_files,
                                      boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
         if (mapped_files == null || mapped_files.isEmpty()) {
@@ -306,6 +352,113 @@ public class OpInEx {
             else {
                 load_maskFile(f, found_entry.get(0), doSplit, doRemove, map_anno_class);
             }
+        }
+    }
+
+
+    /**
+     * For batching prediction mask loading, using a map of ProjectImageEntry and PredictionFile
+     * @param map_files = HashMap<ProjectImageEntry<BufferedImage>, PredictionFile>
+     * @param doSplit = boolean for splitting the found objects
+     * @param doRemove = boolean for removing all existing objects
+     * @param map_anno_class = Map<Integer, String>, map of label id (intensity in mask) mapped to a PathClass name
+     */
+    public void load_predictions(HashMap<ProjectImageEntry<BufferedImage>, PredictionFile> map_files,
+                                 boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        if (map_files == null || map_files.isEmpty()) {
+            logger.error("No mask files to load");
+            return;
+        }
+        for (Map.Entry<ProjectImageEntry<BufferedImage>, PredictionFile> entry : map_files.entrySet()) {
+            File prediction_file = entry.getValue().getPredictedFile();
+            if (!prediction_file.exists()) {
+                logger.error("Mask file does not exist: " + prediction_file.getAbsolutePath());
+            }
+            else {
+                load_pred(entry.getValue(), entry.getKey(), doSplit, doRemove, map_anno_class);
+            }
+        }
+    }
+
+    /**
+     * Load a prediction file matched to a ProjectImageEntry.
+     * Optionally, splitting the found objects.
+     * Optionally, removing all existing objects in the ProjectImageEntry.
+     * The map provides matching PathClass names to the label ID (for future multiclass segmentation)
+     * @param pred_file = PredictionFile, with RegionRequest and link to the prediction mask file
+     * @param imageEntry = ProjectImageEntry
+     * @param doSplit = boolean for splitting the found objects
+     * @param doRemove = boolean for removing all existing objects
+     * @param map_anno_class = Map<Integer, String>, map of label id (intensity in mask) mapped to a PathClass name
+     */
+    public void load_pred(PredictionFile pred_file, ProjectImageEntry<BufferedImage> imageEntry,
+                          boolean doSplit, boolean doRemove, Map<Integer, String> map_anno_class) {
+        // Sanity test
+        if (!qupath.getProject().getImageList().contains(imageEntry)) {
+            logger.error("Project does not contain image: " + imageEntry.getImageName());
+            throw new RuntimeException("Project does not contain image: " + imageEntry.getImageName());
+        }
+        if (!pred_file.getPredictedFile().exists()) {
+            logger.error("Mask file does not exist: " + pred_file.getPredictedFile().getAbsolutePath());
+            throw new RuntimeException("Mask file does not exist: " + pred_file.getPredictedFile().getAbsolutePath());
+        }
+
+        // Quick load the mask
+        List<PathObject> anno_list;
+        try {
+            // Each label will be an object in the list
+            anno_list = ContourTracing.labelsToAnnotations(pred_file.getPredictedFile().toPath(), pred_file.getRequest());
+        } catch (IOException e) {
+            logger.error("Failed to load predicted mask: " + pred_file.getPredictedFile().getAbsolutePath());
+            throw new RuntimeException(e);
+        }
+
+        if (anno_list.isEmpty()) {
+            logger.warn("No objects were found in the predicted image.");
+        }
+
+        // Load the ImageData to add the annotations
+        ImageData<BufferedImage> image_data;
+        try {
+            image_data = imageEntry.readImageData();
+        } catch (IOException e) {
+            logger.error("Failed to load image: " + imageEntry.getImageName());
+            throw new RuntimeException(e);
+        }
+
+        // remove existing annotations from the image
+        if (doRemove) {
+            image_data.getHierarchy().clearAll();
+            logger.debug("Removed all objects from the image " + imageEntry.getImageName());
+        }
+
+        // Add the annotations
+        for (int i = 0; i < anno_list.size(); i++) {
+            // Check that the class map contains a string for the given label
+            String pClassName = map_anno_class.get(i + 1);
+            if (pClassName == null) {
+                logger.warn("Found label value {} in prediction image but no associated PathClass classification was given. Annotation for this label will have no classification.", i+1);
+            }
+            PathClass pClass = PathClass.getInstance(map_anno_class.get(i + 1));
+            if (doSplit) {
+                logger.debug("Splitting the annotation into individual ROIs");
+                // Split the ROI into individual ROIs
+                List<ROI> split_ROIs = RoiTools.splitROI(anno_list.get(i).getROI());
+                // Convert the ROIs to PathObjects
+                List<PathObject> split_annotations = new ArrayList<>();
+                split_ROIs.forEach(r -> split_annotations.add(PathObjects.createAnnotationObject(r, pClass)));
+                // Add the PathObjects
+                image_data.getHierarchy().addObjects(split_annotations);
+            }
+            else {
+                image_data.getHierarchy().addObject(PathObjects.createAnnotationObject(anno_list.get(i).getROI(), pClass));
+            }
+        }
+        try {
+            imageEntry.saveImageData(image_data);
+        } catch (IOException e) {
+            logger.error("Failed to save image: " + imageEntry.getImageName());
+            throw new RuntimeException(e);
         }
     }
 
@@ -398,12 +551,77 @@ public class OpInEx {
     }
 
     /**
+     * Export images to predict to the temp folder.
+     * @param imageList: List of ProjectImageEntry
+     * @param downscale_factor: Integer downscale factor to export image at lower resolution
+     * @param roi: ROI for a part of an image, null for full image
+     * @return: map of matched ProjectImageEntry and PredictionFile (latter contains temp files and RegionRequest)
+     */
+    public HashMap<ProjectImageEntry<BufferedImage>, PredictionFile> exportImagesToPredict(
+            List<ProjectImageEntry<BufferedImage>> imageList, Integer downscale_factor, ROI roi) {
+        // Initialise return map
+        HashMap<ProjectImageEntry<BufferedImage>, PredictionFile> out_map = new HashMap<>();
+
+        // Export each image in the list
+        imageList.forEach(i -> {
+            // Get the QuPath image name and uri
+            String image_name = i.getImageName();
+            List<URI> uri = null;
+            try {
+                uri = i.getURIs().stream().collect(Collectors.toList());
+            } catch (IOException ex) {
+                logger.error("Error: could not get image path for image: <" + image_name + ">");
+            }
+            if (uri == null) logger.error("Could not read the image path for image <" + image_name + ">");
+            else if (uri.isEmpty()) logger.error("No image path found for image <" + image_name + ">");
+            else if (uri.size() > 1) logger.error("More than one path found for image <" + image_name + ">");
+            else {
+                logger.debug("current image: <" + image_name + ">, with image uri: " + uri.get(0));
+                // Save image to the temp folder
+                String clean_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
+                File out_file = new File(temp_dir, clean_name + ".tif");
+
+                // Get the ImageData
+                ImageData<BufferedImage> imageData;
+                try {
+                    imageData = i.readImageData();
+                } catch (IOException e) {
+                    throw new RuntimeException("could not read image data for " + image_name + ". ", e);
+                }
+                // Write a downscaled version of the image
+                ImageServer<BufferedImage> server = imageData.getServer();
+                RegionRequest request;
+                if (roi == null) request = RegionRequest.createInstance(server, downscale_factor);
+                else request = RegionRequest.createInstance(server.getPath(), downscale_factor, roi);
+
+                try {
+                    ImageWriterTools.writeImageRegion(server, request, out_file.getAbsolutePath());
+                    logger.info("Wrote image to: " + out_file.getAbsolutePath());
+                    // Add the image to the return map
+                    out_map.put(i, new PredictionFile(out_file, request, new File(prediction_dir, clean_name + ".tif")));
+                    // Remember the temp_file in the class variable
+                    temp_files.add(out_file);
+                } catch (IOException e) {
+                    logger.error("Could not write image region: " + image_name + " -> " + e);
+                    throw new RuntimeException(e);
+                }
+            }
+        });
+        // Return the map
+        return out_map;
+    }
+
+    /**
+     * Deprecated:
+     *  use exportImagesToPredict(List<ProjectImageEntry<BufferedImage>> imageList, Integer downscale_factor, ROI roi)
+     *
      * Save a list of ImageEntries to the temp folder.
      * Same as the previous exportTempImages, but returns a map of image entries linked to their temp files.
      *
      * @param imageList: List of ProjectImageEntry
      * @return HashMap of ProjectImageEntry<BufferedImage> to temp file
      */
+    @Deprecated
     public HashMap<ProjectImageEntry<BufferedImage>, File> exportImagesToPredict(List<ProjectImageEntry<BufferedImage>> imageList) {
         // Initialise return map
         HashMap<ProjectImageEntry<BufferedImage>, File> out_map = new HashMap<>();
@@ -427,7 +645,7 @@ public class OpInEx {
                 // save image to temp folder
                 image_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
                 File out_file = new File(temp_dir, image_name + ".tif");
-                ImageData<BufferedImage> image_data = null;
+                ImageData<BufferedImage> image_data;
                 try {
                     image_data = i.readImageData();
                 } catch (IOException ex) {
@@ -450,53 +668,6 @@ public class OpInEx {
         return out_map;
     }
 
-    /**
-     * @deprecated
-     * Saves a list of images to the temp folder
-     *
-     * @param imageList = List of ProjectImageEntries to be saved as tif
-     * @return List of saved files
-     */
-    @Deprecated
-    public ArrayList<File> exportTempImages(List<ProjectImageEntry<BufferedImage>> imageList) {
-        // remember the files that have been written (return of this function)
-        ArrayList<File> out_files = new ArrayList<>();
-
-        imageList.forEach(i -> {
-            // get the file name as it is in QuPath
-            String image_name = i.getImageName();
-            // since getImageName is odd, we get the image name from the uri
-            List<URI> uri = null;
-            try {
-                uri = i.getURIs().stream().collect(Collectors.toList());
-            } catch (IOException ex)  {
-                logger.error("Error: could not get image path for image: " + image_name);
-            }
-            if (uri == null) logger.error("Error: could not read image path for image <" + image_name + ">");
-            else if (uri.size() > 1) logger.error("Error: multiple paths for image <" + image_name + ">: currently not supported");
-            else {
-                // save image to temp folder
-                image_name = GeneralTools.stripExtension(new File(uri.get(0).getPath()).getName());
-                File out_file = new File(temp_dir, image_name + ".tif");
-                ImageData<BufferedImage> image_data = null;
-                try {
-                    image_data = i.readImageData();
-                } catch (IOException ex) {
-                    throw new RuntimeException("Could not read image data for " + image_name);
-                }
-                try {
-                    ImageWriterTools.writeImage(image_data.getServer(), out_file.getAbsolutePath());
-                    out_files.add(out_file);
-                    logger.trace("Saved image: " + out_file.getAbsolutePath());
-                } catch (IOException ex) {
-                    throw new RuntimeException("Could not write image:" + out_file.getAbsolutePath());
-                }
-            }
-        });
-        // remember the files that have been written (in the class)
-        temp_files = out_files;
-        return out_files;
-    }
 
     /**
      * Export images with corresponding masks.
@@ -669,5 +840,42 @@ public class OpInEx {
             }
         }
     } // resetTrainFolders()
+
+    public static class PredictionFile {
+        private final RegionRequest request;
+        private final File temp_file; // Exported "raw image"
+        private File predicted_file;
+
+        // Constructors
+        PredictionFile(File temp_file, RegionRequest request, File predicted_file) {
+            this.request = request;
+            this.temp_file = temp_file;
+            this.predicted_file = predicted_file;
+        }
+
+        PredictionFile(File temp_file, RegionRequest request) {
+            this.request = request;
+            this.temp_file = temp_file;
+            this.predicted_file = null;
+        }
+
+        // Getters
+        public RegionRequest getRequest() {
+            return request;
+        }
+
+        public File getTempFile() {
+            return temp_file;
+        }
+
+        public File getPredictedFile() {
+            return predicted_file;
+        }
+
+        // Setter
+        public void setPredicted_file(File predicted_file) {
+            this.predicted_file = predicted_file;
+        }
+    }
 
 } // end class
