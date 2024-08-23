@@ -37,7 +37,7 @@ def efficientV2Unet = EfficientV2UNet.builder()
 // start the prediction
 def imageData = getCurrentImageData()
 def selection = getSelectedObject()
-if (selection != null) selection = selection.getRoi()
+if (selection != null) selection = selection.getROI()
 else selection = null
 
 // For script batching, using only a selection for prediction you can use something like that:
