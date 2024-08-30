@@ -584,7 +584,7 @@ public class EV2UNetTrainCommand implements Runnable {
                     setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
             );
             // Create cli command
-            List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
+            List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficientv2_unet", "--train"));
             args.add("--images");
             args.add(ops.getImages_dir());
             args.add("--masks");

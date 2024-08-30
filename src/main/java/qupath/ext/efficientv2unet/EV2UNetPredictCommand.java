@@ -599,7 +599,7 @@ public class EV2UNetPredictCommand implements Runnable{
                     setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
             );
             // Build the cli arguments
-            List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore","-m", "efficient_v2_unet", "--predict"));
+            List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore","-m", "efficientv2_unet", "--predict"));      // FIXME here should be efficientv2_unet
             args.add("--dir");
             args.add(dir);
             args.add("--model");

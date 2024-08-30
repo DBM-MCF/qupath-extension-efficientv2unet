@@ -577,6 +577,8 @@ public class EfficientV2UNet {
                 }
                 logger.debug("selection: " + selection);
             }
+            // Forget the current selection
+            else selection = null;
 
             // Export the image
             logger.info("Exporting image...");
@@ -630,7 +632,7 @@ public class EfficientV2UNet {
                 setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
         );
         // build the cli arguments
-        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--predict"));
+        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficientv2_unet", "--predict"));
         args.add("--dir");
         args.add(temp_dir);
         args.add("--model");
@@ -675,7 +677,7 @@ public class EfficientV2UNet {
                 setup.getEv2unetPythonPath(), setup.getEnvtype(), this.getClass().getSimpleName()
         );
         // Build the cli arguments
-        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficient_v2_unet", "--train"));
+        List<String> args = new ArrayList<>(Arrays.asList("-W", "ignore", "-m", "efficientv2_unet", "--train"));
         args.add("--images");
         args.add(train_image_dir);
         args.add("--masks");
