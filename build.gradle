@@ -25,7 +25,7 @@ ext.qupathVersion = gradle.ext.qupathVersion
 
 base {
     description = 'Efficient V2 UNet Extension' // TODO
-    version = "0.5.0"       // I'm matching it to the qupath version, can be major.minor.patch-suffix
+    version = "0.5.1"       // I'm matching it to the qupath version, can be major.minor.patch-suffix
     //group = 'io.github.qupath'
 }
 

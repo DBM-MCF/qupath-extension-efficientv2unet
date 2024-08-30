@@ -34,6 +34,8 @@ def efficientV2Unet = EfficientV2UNet.builder()
         .deletePredictionFiles()                                // If called, will delete the generated predicted image (in the Predict output folder)
         .build()
 
+// Save the possible changes (e.g. if a ROI was drawn for prediction)
+getProjectEntry().saveImageData(getCurrentImageData())
 // start the prediction
 def imageData = getCurrentImageData()
 def selection = getSelectedObject()
